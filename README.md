@@ -39,12 +39,35 @@ No real broker is needed. You send the sample input to your app over HTTP; your 
 
 ## 1. Check prerequisites
 
+- JDK 21 (the project targets Java 21).
+- Apache Maven 3.9+.
 - Docker Desktop or Docker Engine with Docker Compose v2 available as `docker compose`; the Docker service must be running.
-- Keep local port `8080` available.
+- Keep local ports `8080` (WireMock) and `5000` (the application) available.
+
+The application scaffold is in this repository. It listens on port `5000`; its `GET /health` endpoint confirms the app is running. The WireMock base URL defaults to `http://localhost:8080` and can be overridden with `WIREMOCK_BASE_URL`.
+
+On Windows, verify the JDK Maven will use:
+
+```powershell
+java -version
+mvn -version
+```
+
+Both commands should report Java 21. If `java -version` reports an older version, configure `JAVA_HOME` and `PATH` to select an installed JDK 21; install a JDK 21 distribution (for example, Eclipse Temurin 21) only if one is not already installed. In the current development environment, JDK 21 is installed at `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot`, Maven is installed at version 3.9.16, and Docker is not available. Install Docker Desktop and start it to run the provided WireMock mocks.
 
 Run the commands below from this folder's root. No PowerShell scripts, Python, `pip`, cloud account, or credentials are required. The fixture data is already included; `compose.yaml` and `wiremock\mappings\` configure the HTTP mocks.
 
-## 2. Start the mocks
+## 2. Run the application locally
+
+Start the Java service in one PowerShell window:
+
+```powershell
+mvn spring-boot:run
+```
+
+Check `http://localhost:5000/health`; a running application responds with `{"status":"UP"}`. You can change its port with `SERVER_PORT` and the mock-service URL with `WIREMOCK_BASE_URL`.
+
+## 3. Start the mocks
 
 The package already includes these deterministic files under `wiremock\__files\`: `product-contexts-PT.json`, `bulk-stock.csv`, and `sample-event.json`. Do not delete them; no fixture-generation step is needed.
 
@@ -56,9 +79,9 @@ Compose runs the public WireMock image with the local mappings and included fixt
 
 **WireMock listens on port `8080`. Starting it does not create or start your application.** Implement and run your own service on a different port; the example below uses `5000`.
 
-## 3. Send the sample input to your service
+## 4. Send the sample input to your service
 
-First implement and start your service as described in the [assignment PDF](Take-Home%20Exercise_%20Size-Level%20Availability%20Processor.pdf).
+Start the application locally as described in the previous section. This scaffold currently exposes only the health endpoint; the event-processing route is part of the next implementation step.
 
 `wiremock\__files\sample-event.json` is an inbound `SellerInventoryChanged` message. Your `POST /_dev/messages` route accepts it for local testing. This route is not provided by WireMock and does not require a broker. It should invoke the same processing path that a production message consumer would use.
 
@@ -74,13 +97,13 @@ Replace `5000` with your service's port, or use Postman or another HTTP client. 
 
 This sends the input event to your app. Your app then calls the provided HTTP mocks and POSTs its transformed `SizeAvailabilityUpdated` event to WireMock at `http://localhost:8080/mock-broker/v1/events`. That WireMock route is an output sink only; it is not the inbound message endpoint or a real broker.
 
-## 4. Inspect the calls your service made
+## 5. Inspect the calls your service made
 
 Open `http://localhost:8080/__admin/requests` in Chrome to inspect the requests WireMock received, including request bodies. This is WireMock's request journal, not an application dashboard.
 
 For a fresh sample event your service applies, expect a Product Context lookup, an availability write, and an output-event POST. The original `POST /_dev/messages` request goes to your app, so it will not appear in WireMock's journal.
 
-## 5. Reset or stop the mocks
+## 6. Reset or stop the mocks
 
 To clear only the request journal while leaving the mappings running, use PowerShell:
 
