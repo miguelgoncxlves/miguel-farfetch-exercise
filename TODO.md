@@ -1,6 +1,6 @@
 # Implementation TODO
 
-Ordered by implementation priority. Points 1–5 are complete; the remaining items describe the next work.
+Ordered by implementation priority. Points 1–6 are complete; the remaining item describes the next work.
 
 - [x] **1. Set up the Java 21 application and local mock configuration.**
   - **How it was done:** Added a Maven project targeting Java 21 with Spring Boot 3.4.5, a runnable application entry point, a `GET /health` endpoint, and a focused health test. The app defaults to port `5000` and reads the mock base URL from `WIREMOCK_BASE_URL` (default `http://localhost:8080`). Added `.gitignore` for Maven build output and documented local run instructions in [Run-Instructions.md](Run-Instructions.md).
@@ -22,9 +22,9 @@ Ordered by implementation priority. Points 1–5 are complete; the remaining ite
   - **How it was done:** Added multipart upload and job-status endpoints. The upload validates CSV structure and required headers synchronously, then returns `202` with a job ID. A bounded two-thread executor processes rows sequentially through the shared event processor, recording job counts and row-level results. Invalid rows and downstream failures do not stop later rows; stale and duplicate rows are reported as skipped. The latest 20 jobs are retained in memory; status is lost on application restart.
   - **Why:** Meets the bulk-import requirement while reusing the tested business flow and reporting partial failures.
 
-- [ ] **6. Match bulk rows against Product Context snapshots.**
-  - Fetch one snapshot per distinct country in an upload and index it by `(productId, sizeId, countryCode)`; do not make one context lookup per row. Keep seller identity in the stock-version key, not the context key.
-  - Document matching time and space complexity and behavior as row and snapshot sizes grow.
+- [x] **6. Match bulk rows against Product Context snapshots.**
+  - **How it was done:** Fetch one snapshot per distinct valid country, build a sparse hash index keyed by `(productId, sizeId, countryCode)`, and reuse the indexed context for all matching rows. The stock-version key still includes the seller. Documented complexity and comparisons in [DECISIONS.md](DECISIONS.md).
+  - **Why:** Gives expected `O(R + N)` matching work for `R` rows and `N` snapshot entries, avoiding both per-row context network calls and `O(R * N)` repeated scans, while retaining only matching snapshot entries.
   - **Why:** Makes the provided 10,000-row import and 50,000-context snapshot practical without unnecessary per-row HTTP calls.
 
 - [ ] **7. Complete focused tests and solution documentation.**

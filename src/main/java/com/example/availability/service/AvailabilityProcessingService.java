@@ -15,6 +15,7 @@ import com.example.availability.version.StockVersionState;
 import java.time.Clock;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -50,6 +51,14 @@ public class AvailabilityProcessingService {
     }
 
     public ProcessingResult process(SellerInventoryChanged event) {
+        return process(
+                event,
+                () -> productContextClient.get(
+                        event.productId(), event.sizeId(), event.countryCode()));
+    }
+
+    public ProcessingResult process(
+            SellerInventoryChanged event, Supplier<ProductContext> contextSupplier) {
         if (!"SellerInventoryChanged".equals(event.eventType()) || event.schemaVersion() != 1) {
             throw new InvalidInventoryEventException(
                     "Only SellerInventoryChanged schema version 1 is supported.");
@@ -82,8 +91,7 @@ public class AvailabilityProcessingService {
                 }
             }
 
-            ProductContext context = productContextClient.get(
-                    event.productId(), event.sizeId(), event.countryCode());
+            ProductContext context = contextSupplier.get();
             if (!context.isActiveAndCountryEnabled()) {
                 throw new ProductContextNotAvailableException(
                         "The product is inactive or is not enabled for the requested country.");

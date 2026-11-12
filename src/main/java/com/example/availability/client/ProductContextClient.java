@@ -1,7 +1,10 @@
 package com.example.availability.client;
 
 import com.example.availability.model.ProductContext;
+import com.example.availability.model.ProductContextSnapshotEntry;
 import com.example.availability.service.ProductContextNotAvailableException;
+import java.util.List;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -20,6 +23,20 @@ public class ProductContextClient {
 
     public ProductContext get(String productId, String sizeId, String countryCode) {
         return retryExecutor.execute(() -> getOnce(productId, sizeId, countryCode));
+    }
+
+    public List<ProductContextSnapshotEntry> getSnapshot(String countryCode) {
+        return retryExecutor.execute(() -> {
+            List<ProductContextSnapshotEntry> snapshot = restClient.get()
+                    .uri("/v1/product-contexts/snapshot?countryCode={countryCode}", countryCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (snapshot == null) {
+                throw new RestClientException(
+                        "Product Context snapshot API returned an empty response.");
+            }
+            return snapshot;
+        });
     }
 
     private ProductContext getOnce(String productId, String sizeId, String countryCode) {

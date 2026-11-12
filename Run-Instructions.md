@@ -60,7 +60,7 @@ $response
 Invoke-RestMethod -Uri "http://localhost:5000$($response.statusUrl)"
 ```
 
-The upload returns `202 Accepted`; poll the supplied status URL until the job reaches a terminal state. The smoke CSV intentionally includes one successful row, one stale row (prime its version first using the matching Postman request), and two row failures. The full 10,000-row fixture is `wiremock\__files\bulk-stock.csv`. For job states, counts, row results, upload limits, and current in-memory job-status behavior, see the [README](README.md).
+The upload returns `202 Accepted`; poll the supplied status URL until the job reaches a terminal state. The smoke CSV intentionally includes one successful row, one stale row (prime its version first using the matching Postman request), and two row failures. The full 10,000-row fixture is `wiremock\__files\bulk-stock.csv`; for that PT-only file, the importer fetches the 50,000-entry Product Context snapshot once, then performs an availability write and output publish for each successful row. For job states, counts, row results, upload limits, and complexity trade-offs, see the [README](README.md) and [DECISIONS](DECISIONS.md).
 
 ## Start the provided mocks
 

@@ -13,6 +13,7 @@ import com.example.availability.client.AvailabilityClient;
 import com.example.availability.client.DownstreamRetryExecutor;
 import com.example.availability.client.OutputEventPublisher;
 import com.example.availability.client.ProductContextClient;
+import com.example.availability.model.ProductContext;
 import com.example.availability.version.InMemoryStockVersionStore;
 import com.example.availability.version.StockProcessingPhase;
 import com.example.availability.version.StockKey;
@@ -92,6 +93,28 @@ class AvailabilityProcessingServiceTest {
                 .andRespond(withStatus(HttpStatus.ACCEPTED));
 
         assertThat(processingService.process(event())).isEqualTo(ProcessingResult.processed());
+    }
+
+    @Test
+    void processesUsingProvidedContextWithoutCallingTheSingleItemEndpoint() {
+        ProductContext context = new ProductContext(
+                "Linen Shirt 123",
+                new ProductContext.Brand("brand-42", "Atelier Example"),
+                "ACTIVE",
+                "EU 38",
+                "EU",
+                true);
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andExpect(method(HttpMethod.PUT))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.productContext.productName").value("Linen Shirt 123"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThat(processingService.process(event(), () -> context))
+                .isEqualTo(ProcessingResult.processed());
     }
 
     @Test
@@ -216,9 +239,13 @@ class AvailabilityProcessingServiceTest {
 
         assertThat(processingService.process(event(8L, "msg-0008", "boutique-42")))
                 .isEqualTo(ProcessingResult.processed());
-        assertThat(processingService.process(event(7L, "replay-old", "boutique-42")))
+        assertThat(processingService.process(event(7L, "replay-old", "boutique-42"), () -> {
+                    throw new AssertionError("A stale event must not resolve its Product Context.");
+                }))
                 .isEqualTo(ProcessingResult.skipped("stale_version"));
-        assertThat(processingService.process(event(8L, "replay-new-id", "boutique-42")))
+        assertThat(processingService.process(event(8L, "replay-new-id", "boutique-42"), () -> {
+                    throw new AssertionError("A duplicate event must not resolve its Product Context.");
+                }))
                 .isEqualTo(ProcessingResult.skipped("duplicate_version"));
     }
 
