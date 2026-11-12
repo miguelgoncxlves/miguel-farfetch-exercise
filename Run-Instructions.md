@@ -1,6 +1,6 @@
 # Run Instructions
 
-The service targets Java 21, uses Maven, and listens on port `5000` by default. It exposes `GET /health` and `POST /_dev/messages`; bulk-import routes are not implemented yet. It uses an embedded H2 database, so no separate database installation is needed.
+The service targets Java 21, uses Maven, and listens on port `5000` by default. It exposes `GET /health`, `POST /_dev/messages`, and asynchronous CSV import routes. It uses an embedded H2 database, so no separate database installation is needed.
 
 ## Prerequisites
 
@@ -48,6 +48,19 @@ The service stores stock versions and processing/outbox state in `data\availabil
 Older versions and completed duplicate versions are skipped. For downstream HTTP `429` and `503` responses, the service makes up to three total attempts, honoring `Retry-After` when present; otherwise it starts at `100ms` and doubles the delay between attempts. Override these settings with `AVAILABILITY_RETRY_MAX_ATTEMPTS` and `AVAILABILITY_RETRY_BASE_DELAY`.
 
 The Postman collection has ordered requests for checking version behavior. To reset state for a clean run, stop the app and remove only `data\availability.mv.db`, then restart it. For the full flow and mock reset commands, see the [README](README.md).
+
+## CSV imports
+
+Upload a multipart CSV file using form field `file`:
+
+```powershell
+$response = curl.exe --silent --show-error --request POST "http://localhost:5000/v1/availability/imports" `
+  --form "file=@wiremock\__files\bulk-smoke.csv;type=text/csv" | ConvertFrom-Json
+$response
+Invoke-RestMethod -Uri "http://localhost:5000$($response.statusUrl)"
+```
+
+The upload returns `202 Accepted`; poll the supplied status URL until the job reaches a terminal state. The smoke CSV intentionally includes one successful row, one stale row (prime its version first using the matching Postman request), and two row failures. The full 10,000-row fixture is `wiremock\__files\bulk-stock.csv`. For job states, counts, row results, upload limits, and current in-memory job-status behavior, see the [README](README.md).
 
 ## Start the provided mocks
 

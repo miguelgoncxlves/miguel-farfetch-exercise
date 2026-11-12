@@ -1,0 +1,5 @@
+sellerId,productId,sizeId,countryCode,availableQuantity,sourceVersion
+csv-smoke-success,style-123,size-38,PT,3,1
+csv-smoke-stale,style-123,size-38,PT,99,7
+csv-smoke-invalid-country,style-123,size-38,pt,4,1
+csv-smoke-unknown,style-100000,size-38,PT,5,1
