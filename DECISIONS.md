@@ -8,11 +8,22 @@ This document records the behavior and trade-offs chosen for the Java 21 size-le
 - Run the application locally on port `5000` by default, WireMock on `8080`, and persist local stock/outbox state in the embedded H2 database at `data\availability.mv.db`. No separate database installation or local broker is required.
 - Use `POST /_dev/messages` as a development-only entry point for one `SellerInventoryChanged` event.
 
+## Production broker choice
+
+For a production event backbone, choose Apache Kafka. It fits the expected high-volume inventory stream and bulk imports, retains events for replay, and lets independent consumer groups scale without competing for one queue. Partition input and output topics by `(sellerId, productId, sizeId, countryCode)` and process records sequentially within each partition so messages for one stock key stay ordered; different partitions can be processed concurrently. The existing source-version check remains necessary because producers and retries can still deliver duplicates or older versions.
+
+| Option | Strengths for this service | Trade-offs |
+|---|---|---|
+| **Kafka (recommended)** | Durable event log, per-partition ordering, replay, and independent consumer groups suit inventory events and recovery. | Requires partition planning, operational monitoring, and consumer-offset management. |
+| RabbitMQ | Flexible exchanges/routing and acknowledgments are a good fit for command or work queues. | Queue-oriented consumption is less natural for replaying historical inventory events or scaling multiple independent subscribers. |
+
+Use at-least-once delivery rather than assuming a transaction spans the broker, database, and Availability API. Persist the input/version and pending output in a database-backed inbox/outbox before acknowledging the input; publish output events from the outbox with a stable event ID, and require consumers to deduplicate that ID. Availability writes must remain idempotent for a stock key and source version. Kafka is a production design recommendation only; the exercise uses its provided HTTP sink and needs no broker installation.
+
 ## Single-event processing
 
 - Look up Product Context before writing availability. Unknown, inactive, or country-disabled products return `422`, with no availability update or output event.
 - For eligible products, write availability and then publish a normalized `SizeAvailabilityUpdated` event to the HTTP sink.
-- Treat the HTTP sink as a test substitute for a broker, not as the production broker decision.
+- Treat the HTTP sink as a test substitute for the production broker described above.
 
 ## Stock identity and event versions
 

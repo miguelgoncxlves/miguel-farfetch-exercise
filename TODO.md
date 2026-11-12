@@ -1,6 +1,6 @@
 # Implementation TODO
 
-Ordered by implementation priority. Points 1–6 are complete; the remaining item describes the next work.
+Ordered by implementation priority. Points 1–7 are complete.
 
 - [x] **1. Set up the Java 21 application and local mock configuration.**
   - **How it was done:** Added a Maven project targeting Java 21 with Spring Boot 3.4.5, a runnable application entry point, a `GET /health` endpoint, and a focused health test. The app defaults to port `5000` and reads the mock base URL from `WIREMOCK_BASE_URL` (default `http://localhost:8080`). Added `.gitignore` for Maven build output and documented local run instructions in [Run-Instructions.md](Run-Instructions.md).
@@ -24,10 +24,8 @@ Ordered by implementation priority. Points 1–6 are complete; the remaining ite
 
 - [x] **6. Match bulk rows against Product Context snapshots.**
   - **How it was done:** Fetch one snapshot per distinct valid country, build a sparse hash index keyed by `(productId, sizeId, countryCode)`, and reuse the indexed context for all matching rows. The stock-version key still includes the seller. Documented complexity and comparisons in [DECISIONS.md](DECISIONS.md).
-  - **Why:** Gives expected `O(R + N)` matching work for `R` rows and `N` snapshot entries, avoiding both per-row context network calls and `O(R * N)` repeated scans, while retaining only matching snapshot entries.
-  - **Why:** Makes the provided 10,000-row import and 50,000-context snapshot practical without unnecessary per-row HTTP calls.
+  - **Why:** Gives expected `O(R + N)` matching work for `R` rows and `N` snapshot entries, avoiding both per-row context network calls and `O(R * N)` repeated scans, while retaining only matching snapshot entries. This makes the provided 10,000-row import and 50,000-context snapshot practical without unnecessary per-row HTTP calls.
 
-- [ ] **7. Complete focused tests and solution documentation.**
-  - Cover the event flow, stale and duplicate versions across both inputs, context edge cases, malformed uploads, row-level failures, and the supplied transient-failure cases.
-  - Document assumptions, run instructions, retry/idempotency and partial-failure behavior, concurrency limits, context-matching complexity, and a production broker choice.
+- [x] **7. Complete focused tests and solution documentation.**
+  - **How it was done:** Added focused tests for duplicate and stale versions, context eligibility and snapshot failures, malformed CSV, row-level outcomes, and retry behavior across downstream calls. Documented Java 21 setup, runtime assumptions, job and concurrency limits, snapshot complexity, retry/idempotency and recovery semantics, plus a Kafka recommendation compared with RabbitMQ.
   - **Why:** Demonstrates correctness for the assignment's important cases and makes design tradeoffs explainable.

@@ -14,9 +14,12 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.response.MockRestResponseCreators;
 import org.springframework.web.client.RestClient;
 
 class ProductContextClientTest {
@@ -72,5 +75,19 @@ class ProductContextClientTest {
         assertThat(snapshot.get(0).countryCode()).isEqualTo("PT");
         assertThat(snapshot.get(0).context().productName()).isEqualTo("Linen Shirt 123");
         assertThat(snapshot.get(0).context().isActiveAndCountryEnabled()).isTrue();
+    }
+
+    @Test
+    void retriesSnapshotAfterTransientServiceUnavailableResponse() {
+        String snapshotUrl = BASE_URL + "/v1/product-contexts/snapshot?countryCode=PT";
+        server.expect(requestTo(snapshotUrl))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(MockRestResponseCreators.withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                        .header(HttpHeaders.RETRY_AFTER, "0"));
+        server.expect(requestTo(snapshotUrl))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+        assertThat(productContextClient.getSnapshot("PT")).isEmpty();
     }
 }

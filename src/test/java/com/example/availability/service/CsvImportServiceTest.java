@@ -144,6 +144,34 @@ class CsvImportServiceTest {
     }
 
     @Test
+    void reportsDuplicateCsvVersionsAsSkippedRows() {
+        when(productContextClient.getSnapshot("PT"))
+                .thenReturn(List.of(snapshotEntry("style-123", "size-38", "PT")));
+        when(processingService.process(any(SellerInventoryChanged.class), any()))
+                .thenReturn(
+                        ProcessingResult.processed(),
+                        ProcessingResult.skipped("duplicate_version"));
+
+        ImportAcceptedResponse accepted = importService.submit(csv("""
+                sellerId,productId,sizeId,countryCode,availableQuantity,sourceVersion
+                seller-1,style-123,size-38,PT,3,7
+                seller-1,style-123,size-38,PT,4,7
+                """));
+        executor.runNext();
+
+        ImportJobStatusResponse status = importService.status(accepted.jobId());
+        assertThat(status.state()).isEqualTo(ImportJobState.COMPLETED);
+        assertThat(status.succeededRows()).isEqualTo(1);
+        assertThat(status.skippedRows()).isEqualTo(1);
+        assertThat(status.failedRows()).isZero();
+        assertThat(status.rowResults())
+                .extracting(result -> result.status())
+                .containsExactly(ImportRowStatus.SUCCEEDED, ImportRowStatus.SKIPPED);
+        assertThat(status.rowResults().get(1).reason()).isEqualTo("duplicate_version");
+        verify(processingService, times(2)).process(any(SellerInventoryChanged.class), any());
+    }
+
+    @Test
     void fetchesOneSnapshotPerCountryAndResolvesByProductSizeAndCountry() {
         when(productContextClient.getSnapshot("PT"))
                 .thenReturn(List.of(
@@ -240,6 +268,13 @@ class CsvImportServiceTest {
                 "sellerId,productId,sizeId,countryCode,availableQuantity,sourceVersion\n")))
                 .isInstanceOf(InvalidCsvImportException.class)
                 .hasMessageContaining("at least one data row");
+
+        assertThatThrownBy(() -> importService.submit(csv("""
+                sellerId,productId,sizeId,countryCode,availableQuantity,sourceVersion
+                seller-1,style-123,size-38,PT,3,"unterminated
+                """)))
+                .isInstanceOf(InvalidCsvImportException.class)
+                .hasMessageContaining("malformed");
         assertThat(executor.tasks).isEmpty();
     }
 
