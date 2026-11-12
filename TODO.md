@@ -1,14 +1,13 @@
 # Implementation TODO
 
-Ordered by implementation priority. Point 1 is complete; the remaining items describe the next work.
+Ordered by implementation priority. Points 1 and 2 are complete; the remaining items describe the next work.
 
 - [x] **1. Set up the Java 21 application and local mock configuration.**
   - **How it was done:** Added a Maven project targeting Java 21 with Spring Boot 3.4.5, a runnable application entry point, a `GET /health` endpoint, and a focused health test. The app defaults to port `5000` and reads the mock base URL from `WIREMOCK_BASE_URL` (default `http://localhost:8080`). Added `.gitignore` for Maven build output and documented local run instructions in [Run-Instructions.md](Run-Instructions.md).
   - **Why:** Establishes a small, runnable baseline before implementing business behavior. No local broker or mock-server code is needed.
 
-- [ ] **2. Implement and test the single-event processing flow.**
-  - Add `POST /_dev/messages` with validated request models, then route the request through shared processing logic: look up Product Context, update availability, and publish the normalized `SizeAvailabilityUpdated` event.
-  - Decide and document how to handle unknown, inactive, or country-disabled product contexts.
+- [x] **2. Implement and test the single-event processing flow.**
+  - **How it was done:** Added a validated `POST /_dev/messages` endpoint and shared processing service. It fetches Product Context, stops with `422` and makes no availability write or event publish for unknown, inactive, or country-disabled contexts, then writes availability and publishes a normalized `SizeAvailabilityUpdated` event for eligible contexts. Added focused controller and HTTP-flow tests.
   - **Why:** Proves the core business flow with one event before introducing bulk processing.
 
 - [ ] **3. Enforce version ordering and safe retries across both input paths.**

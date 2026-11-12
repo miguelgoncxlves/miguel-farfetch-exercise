@@ -1,6 +1,6 @@
 # Start Here: Size-Level Availability Exercise
 
-This repository contains the assignment PDF, local mock dependencies, and a Java 21 service scaffold. The assignment's event-processing and bulk-import features remain to be implemented.
+This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event processing flow. Bulk imports and reliability controls remain to be implemented.
 
 | Document | Use it for |
 |---|---|
@@ -11,14 +11,14 @@ This repository contains the assignment PDF, local mock dependencies, and a Java
 
 The product and inventory scenario, APIs, contracts, and figures are hypothetical; they do not describe internal Farfetch systems. Extract this folder and run all commands below from the folder containing `compose.yaml`.
 
-## You implement / we provide
+## Service status and provided components
 
-| To implement in the service | We provide |
+| Service capability | Status / provided component |
 |---|---|
-| `POST /_dev/messages` for test input events | A ready-to-use sample event JSON file |
-| CSV upload and job-status endpoints | A ready-to-use 10,000-row CSV |
-| Shared processing and asynchronous bulk work | Product Context lookup and 50,000-object snapshot APIs |
-| Calls that update availability and publish output events | Availability API and output-event HTTP mocks |
+| `POST /_dev/messages` for test input events | Implemented; sample event JSON file provided |
+| CSV upload and job-status endpoints | To implement; 10,000-row CSV provided |
+| Shared processing and asynchronous bulk work | Single-event flow implemented; Product Context and snapshot APIs provided |
+| Calls that update availability and publish output events | Implemented for single events; Availability API and output-event HTTP mocks provided |
 
 The assignment PDF includes the blue **YOUR SOLUTION HERE** diagram, already rendered and available offline. This plain-text version also works in Markdown viewers:
 
@@ -55,9 +55,9 @@ Compose runs the public WireMock image with the local mappings and included fixt
 
 ## 2. Send the sample input to your service
 
-Start the application as described in [Run-Instructions](Run-Instructions.md). The scaffold currently exposes only the health endpoint; `POST /_dev/messages` will be implemented in a later step.
+Start the application as described in [Run-Instructions](Run-Instructions.md). The `POST /_dev/messages` route is a test-only ingress and invokes the implemented single-event flow.
 
-`wiremock\__files\sample-event.json` is an inbound `SellerInventoryChanged` message. Once implemented, your `POST /_dev/messages` route will accept it for local testing. This route is not provided by WireMock and does not require a broker. It should invoke the same processing path that a production message consumer would use.
+`wiremock\__files\sample-event.json` is an inbound `SellerInventoryChanged` message. The service's `POST /_dev/messages` route accepts it for local testing. This route is not provided by WireMock and does not require a broker. It invokes the single-event processing flow.
 
 For example, if your service listens on port `5000`, run:
 
@@ -67,9 +67,9 @@ curl.exe --request POST "http://localhost:5000/_dev/messages" `
   --data-binary "@wiremock\__files\sample-event.json"
 ```
 
-Once the event endpoint is implemented, replace `5000` with your service's port, or use Postman or another HTTP client. The `@` tells curl to read the included JSON file as the request body. This example uses PowerShell command-line syntax, not a supplied script.
+Replace `5000` with your service's port, or use Postman or another HTTP client. The `@` tells curl to read the included JSON file as the request body. This example uses PowerShell command-line syntax, not a supplied script.
 
-Once the event endpoint is implemented, it will send the input event through your app, which then calls the provided HTTP mocks and POSTs its transformed `SizeAvailabilityUpdated` event to WireMock at `http://localhost:8080/mock-broker/v1/events`. That WireMock route is an output sink only; it is not the inbound message endpoint or a real broker.
+The service looks up Product Context, writes availability, and POSTs its transformed `SizeAvailabilityUpdated` event to WireMock at `http://localhost:8080/mock-broker/v1/events`. Unknown products, inactive products, and products not enabled in the requested country return `422` without an availability write or output event. The WireMock route is an output sink only; it is not the inbound message endpoint or a real broker.
 
 ## 3. Inspect the calls your service made
 
