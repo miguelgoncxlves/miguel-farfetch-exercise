@@ -1,6 +1,6 @@
 # Run Instructions
 
-The service targets Java 21, uses Maven, and listens on port `5000` by default. It exposes `GET /health` and `POST /_dev/messages`; bulk-import routes are not implemented yet.
+The service targets Java 21, uses Maven, and listens on port `5000` by default. It exposes `GET /health` and `POST /_dev/messages`; bulk-import routes are not implemented yet. It uses an embedded H2 database, so no separate database installation is needed.
 
 ## Prerequisites
 
@@ -43,9 +43,11 @@ Override the application port with `SERVER_PORT` or the mock-service base URL wi
 
 ## Version ordering and retries
 
-The service keeps the latest applied version and any pending output publication in memory, keyed by seller, product, size, and country. Restarting the app clears this state, and separate app instances do not share it. Older versions and completed duplicate versions are skipped. For downstream HTTP `429` and `503` responses, the service makes up to three total attempts, honoring `Retry-After` when present; otherwise it starts at `100ms` and doubles the delay between attempts. Override these settings with `AVAILABILITY_RETRY_MAX_ATTEMPTS` and `AVAILABILITY_RETRY_BASE_DELAY`.
+The service stores stock versions and processing/outbox state in `data\availability.mv.db`, keyed by seller, product, size, and country. The database directory is created automatically and is excluded from Git. The recovery worker retries pending availability writes or output publications after a restart. The default H2 file database is for a single local app instance; it is not a shared multi-instance database. Override the H2 JDBC URL with `AVAILABILITY_DATABASE_URL`.
 
-The Postman collection has ordered requests for checking version behavior. Restart the app before a fresh run so the in-memory version state starts empty. For the full flow and mock reset commands, see the [README](README.md).
+Older versions and completed duplicate versions are skipped. For downstream HTTP `429` and `503` responses, the service makes up to three total attempts, honoring `Retry-After` when present; otherwise it starts at `100ms` and doubles the delay between attempts. Override these settings with `AVAILABILITY_RETRY_MAX_ATTEMPTS` and `AVAILABILITY_RETRY_BASE_DELAY`.
+
+The Postman collection has ordered requests for checking version behavior. To reset state for a clean run, stop the app and remove only `data\availability.mv.db`, then restart it. For the full flow and mock reset commands, see the [README](README.md).
 
 ## Start the provided mocks
 

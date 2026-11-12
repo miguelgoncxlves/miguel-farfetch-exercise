@@ -35,7 +35,7 @@
             "messages"
           ]
         },
-        "description": "First request in the version-ordering sequence. Restart the app before a fresh sequence; this version should be processed."
+        "description": "First request in the version-ordering sequence. Clear the local H2 state before a fresh sequence; this version should be processed."
       },
       "response": []
     },

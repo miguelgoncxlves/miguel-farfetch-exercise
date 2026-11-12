@@ -14,6 +14,7 @@ import com.example.availability.client.DownstreamRetryExecutor;
 import com.example.availability.client.OutputEventPublisher;
 import com.example.availability.client.ProductContextClient;
 import com.example.availability.version.InMemoryStockVersionStore;
+import com.example.availability.version.StockProcessingPhase;
 import com.example.availability.version.StockKey;
 import com.example.availability.version.StockKeyLockRegistry;
 import java.time.Duration;
@@ -30,6 +31,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
 
@@ -260,13 +262,105 @@ class AvailabilityProcessingServiceTest {
                 .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
         assertThat(versionStore.state(
                 new StockKey("boutique-42", "style-123", "size-38", "PT")))
-                .hasValueSatisfying(state -> assertThat(state.pendingOutputEvent()).isNotNull());
+                .hasValueSatisfying(state -> {
+                    assertThat(state.phase()).isEqualTo(StockProcessingPhase.PUBLICATION_PENDING);
+                    assertThat(state.outputEvent()).isNotNull();
+                });
 
         assertThat(processingService.process(event(7L, "replayed-message-id", "boutique-42")))
                 .isEqualTo(ProcessingResult.processed());
         assertThat(versionStore.state(
                 new StockKey("boutique-42", "style-123", "size-38", "PT")))
-                .hasValueSatisfying(state -> assertThat(state.pendingOutputEvent()).isNull());
+                .hasValueSatisfying(state -> {
+                    assertThat(state.phase()).isEqualTo(StockProcessingPhase.COMPLETE);
+                    assertThat(state.outputEvent()).isNull();
+                });
+    }
+
+    @Test
+    void recoversPendingOutputWithoutRepeatingAvailabilityWrite() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                            .header(HttpHeaders.RETRY_AFTER, "0"));
+        }
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThatThrownBy(() -> processingService.process(event()))
+                .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
+
+        processingService.recoverPendingOperations();
+
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state -> {
+                    assertThat(state.phase()).isEqualTo(StockProcessingPhase.COMPLETE);
+                    assertThat(state.outputEvent()).isNull();
+                });
+    }
+
+    @Test
+    void recoversAvailabilityPendingOperationUsingPersistedInputAndContext() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo(
+                            BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                            .header(HttpHeaders.RETRY_AFTER, "0"));
+        }
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThatThrownBy(() -> processingService.process(event()))
+                .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state ->
+                        assertThat(state.phase()).isEqualTo(StockProcessingPhase.AVAILABILITY_PENDING));
+
+        processingService.recoverPendingOperations();
+
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state ->
+                        assertThat(state.phase()).isEqualTo(StockProcessingPhase.COMPLETE));
+    }
+
+    @Test
+    void doesNotAutomaticallyRetryPermanentPublicationFailureButAllowsReplay() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST));
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThatThrownBy(() -> processingService.process(event()))
+                .isInstanceOf(HttpClientErrorException.BadRequest.class);
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state ->
+                        assertThat(state.phase()).isEqualTo(StockProcessingPhase.PUBLICATION_FAILED));
+        assertThat(versionStore.pendingKeys()).isEmpty();
+
+        assertThat(processingService.process(event(7L, "replay-after-fix", "boutique-42")))
+                .isEqualTo(ProcessingResult.processed());
     }
 
     private SellerInventoryChanged event() {

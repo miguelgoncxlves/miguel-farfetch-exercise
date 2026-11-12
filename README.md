@@ -1,6 +1,6 @@
 # Start Here: Size-Level Availability Exercise
 
-This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, in-memory version ordering, and bounded retries. Bulk imports and durable recovery remain to be implemented.
+This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, durable stock-version ordering, bounded retries, and a local outbox. Bulk imports remain to be implemented.
 
 | Document | Use it for |
 |---|---|
@@ -20,7 +20,7 @@ The product and inventory scenario, APIs, contracts, and figures are hypothetica
 | CSV upload and job-status endpoints | To implement; 10,000-row CSV provided |
 | Shared processing and asynchronous bulk work | Single-event flow implemented; Product Context and snapshot APIs provided |
 | Calls that update availability and publish output events | Implemented for single events; Availability API and output-event HTTP mocks provided |
-| Stock version ordering and transient dependency retries | Implemented in memory; retries `429`/`503` up to three total attempts |
+| Stock version ordering, partial-failure recovery, and transient dependency retries | Implemented with a local H2 file-backed state/outbox; retries `429`/`503` up to three total attempts |
 
 The assignment PDF includes the blue **YOUR SOLUTION HERE** diagram, already rendered and available offline. This plain-text version also works in Markdown viewers:
 
@@ -73,9 +73,13 @@ Replace `5000` with your service's port, or use Postman or another HTTP client. 
 
 The service looks up Product Context, writes availability, and POSTs its transformed `SizeAvailabilityUpdated` event to WireMock at `http://localhost:8080/mock-broker/v1/events`. Unknown products, inactive products, and products not enabled in the requested country return `422` without an availability write or output event. The WireMock route is an output sink only; it is not the inbound message endpoint or a real broker.
 
-For each `(sellerId, productId, sizeId, countryCode)` stock key, an older `sourceVersion` is skipped as `stale_version`, and a repeated completed version is skipped as `duplicate_version`. New versions are processed in order for that key. The service retries downstream `429` and `503` responses up to three total attempts, honoring `Retry-After` or using short exponential delays. Version and pending-publication state is in memory only; it resets on app restart and is not shared across multiple app instances.
+For each `(sellerId, productId, sizeId, countryCode)` stock key, an older `sourceVersion` is skipped as `stale_version`, and a repeated completed version is skipped as `duplicate_version`. New versions are processed in order for that key. The service retries downstream `429` and `503` responses up to three total attempts, honoring `Retry-After` or using short exponential delays.
 
-The [Postman collection](postman/size-level-availability.postman_collection.json) includes a sequence for manually exercising initial, duplicate, stale, newer, and independent-seller versions.
+The local H2 database stores stock versions and pending processing/outbox state in `data\availability.mv.db`. If availability succeeds but event publication fails, the same event (with its stable generated ID) remains pending and is retried by a background recovery task or an input replay. If the process crashes after the availability PUT but before recording that it succeeded, the PUT can be repeated; this relies on the PUT being idempotent for the same stock key and version. If publication succeeded but its acknowledgment was lost, publishing the same event ID again is possible, so downstream consumers should deduplicate. The file-backed H2 setup is for one local app instance; production multi-instance deployment needs a shared database with transactional state changes and coordination.
+
+Automatic recovery continues for pending operations after transient failures and transport errors. A non-retryable downstream HTTP response is recorded as a failed operation and is not polled automatically; replay the same event after correcting the dependency or data. A newer event for that stock key first attempts to finish the failed earlier operation, preserving order.
+
+The [Postman collection](postman/size-level-availability.postman_collection.json) includes a sequence for manually exercising initial, duplicate, stale, newer, and independent-seller versions. A fresh version-ordering test requires clearing the local H2 state; restarting the app alone no longer resets it.
 
 ## 3. Inspect the calls your service made
 
