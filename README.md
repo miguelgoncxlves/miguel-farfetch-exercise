@@ -1,6 +1,6 @@
 # Start Here: Size-Level Availability Exercise
 
-This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, durable stock-version ordering, bounded retries, a local outbox, and asynchronous CSV import jobs. Snapshot-based context matching remains to be implemented.
+This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, durable stock-version ordering, bounded retries, a local outbox, and asynchronous CSV import jobs using country-level Product Context snapshots.
 
 | Document | Use it for |
 |---|---|
