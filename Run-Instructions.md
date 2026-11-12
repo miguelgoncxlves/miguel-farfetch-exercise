@@ -1,6 +1,6 @@
 # Run Instructions
 
-The service targets Java 21, uses Maven, and listens on port `5000` by default. The current scaffold exposes `GET /health`; the event-processing routes are not implemented yet.
+The service targets Java 21, uses Maven, and listens on port `5000` by default. It exposes `GET /health` and `POST /_dev/messages`; bulk-import routes are not implemented yet.
 
 ## Prerequisites
 
