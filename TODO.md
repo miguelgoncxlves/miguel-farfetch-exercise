@@ -1,6 +1,6 @@
 # Implementation TODO
 
-Ordered by implementation priority. Points 1 and 2 are complete; the remaining items describe the next work.
+Ordered by implementation priority. Points 1–3 are complete; the remaining items describe the next work.
 
 - [x] **1. Set up the Java 21 application and local mock configuration.**
   - **How it was done:** Added a Maven project targeting Java 21 with Spring Boot 3.4.5, a runnable application entry point, a `GET /health` endpoint, and a focused health test. The app defaults to port `5000` and reads the mock base URL from `WIREMOCK_BASE_URL` (default `http://localhost:8080`). Added `.gitignore` for Maven build output and documented local run instructions in [Run-Instructions.md](Run-Instructions.md).
@@ -10,13 +10,12 @@ Ordered by implementation priority. Points 1 and 2 are complete; the remaining i
   - **How it was done:** Added a validated `POST /_dev/messages` endpoint and shared processing service. It fetches Product Context, stops with `422` and makes no availability write or event publish for unknown, inactive, or country-disabled contexts, then writes availability and publishes a normalized `SizeAvailabilityUpdated` event for eligible contexts. Added focused controller and HTTP-flow tests.
   - **Why:** Proves the core business flow with one event before introducing bulk processing.
 
-- [ ] **3. Enforce version ordering and safe retries across both input paths.**
-  - Track `sourceVersion` for each `(sellerId, productId, sizeId, countryCode)` stock key; reject stale versions, handle duplicate/equal-version delivery idempotently, and coordinate updates to the same key across event and bulk processing.
-  - Use bounded retries for transient `429` and `503` responses, respecting `Retry-After`; do not retry permanent validation or missing-context failures.
-  - **Why:** Prevents replays or out-of-order work from overwriting newer stock and makes dependency failures recoverable.
+- [x] **3. Enforce version ordering and safe retries across both input paths.**
+  - **How it was done:** The shared processing service serializes updates by `(sellerId, productId, sizeId, countryCode)`, skips older versions and completed duplicates, and retries `429`/`503` downstream responses up to three total attempts. It honors `Retry-After` or uses exponential delays starting at `100ms`. If availability succeeds but output publication fails, the applied version and pending event are retained in memory so a replay can retry publication without repeating the availability write. When CSV processing is added, it must call this same service.
+  - **Why:** Prevents replays or out-of-order work from overwriting newer stock and makes transient dependency failures recoverable.
 
 - [ ] **4. Handle partial downstream success.**
-  - Define recovery behavior when an availability write succeeds but publishing the output event fails. For a production-oriented design, explain durable version state and an outbox or reconciliation strategy; the two remote calls are not atomic.
+  - The current in-memory pending-event state supports retry during the running process, but a restart can still lose it. Add durable version state and an outbox or reconciliation strategy; the two remote calls are not atomic.
   - **Why:** Avoids silently losing events or incorrectly advancing version state after only part of the flow succeeds.
 
 - [ ] **5. Add asynchronous CSV imports and job status.**

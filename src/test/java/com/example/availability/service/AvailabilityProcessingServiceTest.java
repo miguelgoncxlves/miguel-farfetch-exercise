@@ -1,6 +1,7 @@
 package com.example.availability.service;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -9,15 +10,23 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 import com.example.availability.api.SellerInventoryChanged;
 import com.example.availability.client.AvailabilityClient;
+import com.example.availability.client.DownstreamRetryExecutor;
 import com.example.availability.client.OutputEventPublisher;
 import com.example.availability.client.ProductContextClient;
+import com.example.availability.version.InMemoryStockVersionStore;
+import com.example.availability.version.StockKey;
+import com.example.availability.version.StockKeyLockRegistry;
+import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -30,17 +39,26 @@ class AvailabilityProcessingServiceTest {
 
     private MockRestServiceServer server;
     private AvailabilityProcessingService processingService;
+    private List<Duration> retryDelays;
+    private InMemoryStockVersionStore versionStore;
 
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder().baseUrl(BASE_URL);
         server = MockRestServiceServer.bindTo(builder).build();
         RestClient restClient = builder.build();
+        Clock clock = Clock.fixed(Instant.parse("2026-10-20T08:01:00Z"), ZoneOffset.UTC);
+        retryDelays = new ArrayList<>();
+        DownstreamRetryExecutor retryExecutor =
+                new DownstreamRetryExecutor(clock, 3, Duration.ofMillis(100), retryDelays::add);
+        versionStore = new InMemoryStockVersionStore();
         processingService = new AvailabilityProcessingService(
-                new ProductContextClient(restClient),
-                new AvailabilityClient(restClient),
-                new OutputEventPublisher(restClient),
-                Clock.fixed(Instant.parse("2026-10-20T08:01:00Z"), ZoneOffset.UTC));
+                new ProductContextClient(restClient, retryExecutor),
+                new AvailabilityClient(restClient, retryExecutor),
+                new OutputEventPublisher(restClient, retryExecutor),
+                versionStore,
+                new StockKeyLockRegistry(),
+                clock);
     }
 
     @AfterEach
@@ -71,7 +89,7 @@ class AvailabilityProcessingServiceTest {
                 .andExpect(jsonPath("$.productContext.brand.name").value("Atelier Example"))
                 .andRespond(withStatus(HttpStatus.ACCEPTED));
 
-        processingService.process(event());
+        assertThat(processingService.process(event())).isEqualTo(ProcessingResult.processed());
     }
 
     @Test
@@ -107,26 +125,166 @@ class AvailabilityProcessingServiceTest {
 
     @Test
     void surfacesDependencyFailureWithoutAttemptingDownstreamWrites() {
-        server.expect(requestTo(
-                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
-                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo(
+                            BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                            .header(HttpHeaders.RETRY_AFTER, "0"));
+        }
 
         assertThatThrownBy(() -> processingService.process(event()))
                 .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
+        assertThat(retryDelays).containsExactly(Duration.ZERO, Duration.ZERO);
+    }
+
+    @Test
+    void retriesTransientFailuresAndHonorsRetryAfter() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                        .header(HttpHeaders.RETRY_AFTER, "Tue, 20 Oct 2026 08:01:02 GMT"));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .header(HttpHeaders.RETRY_AFTER, "0"));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                        .header(HttpHeaders.RETRY_AFTER, "0"));
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThat(processingService.process(event())).isEqualTo(ProcessingResult.processed());
+        assertThat(retryDelays)
+                .containsExactly(Duration.ofSeconds(2), Duration.ZERO, Duration.ZERO);
+    }
+
+    @Test
+    void usesExponentialBackoffWhenRetryAfterIsMissing() {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            server.expect(requestTo(
+                            BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        }
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThat(processingService.process(event())).isEqualTo(ProcessingResult.processed());
+        assertThat(retryDelays)
+                .containsExactly(Duration.ofMillis(100), Duration.ofMillis(200));
+    }
+
+    @Test
+    void stopsAfterThreeAttemptsAndDoesNotAdvanceTheVersion() {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo(
+                            BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                            .header(HttpHeaders.RETRY_AFTER, "0"));
+        }
+
+        assertThatThrownBy(() -> processingService.process(event()))
+                .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
+        assertThat(retryDelays).containsExactly(Duration.ZERO, Duration.ZERO);
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT"))).isEmpty();
+    }
+
+    @Test
+    void skipsStaleAndDuplicateVersionsForTheSameStockKey() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThat(processingService.process(event(8L, "msg-0008", "boutique-42")))
+                .isEqualTo(ProcessingResult.processed());
+        assertThat(processingService.process(event(7L, "replay-old", "boutique-42")))
+                .isEqualTo(ProcessingResult.skipped("stale_version"));
+        assertThat(processingService.process(event(8L, "replay-new-id", "boutique-42")))
+                .isEqualTo(ProcessingResult.skipped("duplicate_version"));
+    }
+
+    @Test
+    void tracksVersionsIndependentlyForDifferentSellers() {
+        for (String sellerId : List.of("boutique-42", "boutique-43")) {
+            server.expect(requestTo(
+                            BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                    .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+            server.expect(requestTo(
+                            BASE_URL + "/v1/availability/" + sellerId
+                                    + "/style-123/size-38?countryCode=PT"))
+                    .andRespond(withSuccess());
+            server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                    .andRespond(withStatus(HttpStatus.ACCEPTED));
+        }
+
+        assertThat(processingService.process(event(8L, "seller-one", "boutique-42")))
+                .isEqualTo(ProcessingResult.processed());
+        assertThat(processingService.process(event(7L, "seller-two", "boutique-43")))
+                .isEqualTo(ProcessingResult.processed());
+    }
+
+    @Test
+    void retriesPendingOutputOnReplayWithoutRepeatingTheAvailabilityWrite() {
+        server.expect(requestTo(
+                        BASE_URL + "/v1/products/style-123/sizes/size-38?countryCode=PT"))
+                .andRespond(withSuccess(productContext("ACTIVE", true), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                        BASE_URL + "/v1/availability/boutique-42/style-123/size-38?countryCode=PT"))
+                .andRespond(withSuccess());
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                            .header(HttpHeaders.RETRY_AFTER, "0"));
+        }
+        server.expect(requestTo(BASE_URL + "/mock-broker/v1/events"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+
+        assertThatThrownBy(() -> processingService.process(event()))
+                .isInstanceOf(HttpServerErrorException.ServiceUnavailable.class);
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state -> assertThat(state.pendingOutputEvent()).isNotNull());
+
+        assertThat(processingService.process(event(7L, "replayed-message-id", "boutique-42")))
+                .isEqualTo(ProcessingResult.processed());
+        assertThat(versionStore.state(
+                new StockKey("boutique-42", "style-123", "size-38", "PT")))
+                .hasValueSatisfying(state -> assertThat(state.pendingOutputEvent()).isNull());
     }
 
     private SellerInventoryChanged event() {
+        return event(7L, "msg-0001", "boutique-42");
+    }
+
+    private SellerInventoryChanged event(long sourceVersion, String eventId, String sellerId) {
         return new SellerInventoryChanged(
-                "msg-0001",
+                eventId,
                 "SellerInventoryChanged",
                 1,
                 Instant.parse("2026-10-20T08:00:00Z"),
-                "boutique-42",
+                sellerId,
                 "style-123",
                 "size-38",
                 "PT",
                 3,
-                7L);
+                sourceVersion);
     }
 
     private String productContext(String status, boolean countryEnabled) {

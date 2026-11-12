@@ -11,12 +11,18 @@ import org.springframework.web.client.RestClientException;
 public class ProductContextClient {
 
     private final RestClient restClient;
+    private final DownstreamRetryExecutor retryExecutor;
 
-    public ProductContextClient(RestClient restClient) {
+    public ProductContextClient(RestClient restClient, DownstreamRetryExecutor retryExecutor) {
         this.restClient = restClient;
+        this.retryExecutor = retryExecutor;
     }
 
     public ProductContext get(String productId, String sizeId, String countryCode) {
+        return retryExecutor.execute(() -> getOnce(productId, sizeId, countryCode));
+    }
+
+    private ProductContext getOnce(String productId, String sizeId, String countryCode) {
         try {
             ProductContext context = restClient.get()
                     .uri("/v1/products/{productId}/sizes/{sizeId}?countryCode={countryCode}",
