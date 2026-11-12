@@ -36,6 +36,16 @@ This document records the behavior and trade-offs chosen for the Java 21 size-le
 - A crash after remote PUT success but before saving `PUBLICATION_PENDING` can cause the same PUT to be sent again. This relies on the API's PUT operation being idempotent for the same stock key and source version. A crash after event acceptance but before marking completion can cause a repeat publish with the same event ID; downstream consumers must deduplicate by that ID.
 - The H2 file is durable across local process restarts but supports only one local application instance in this setup. A production multi-instance service should use a shared database, transactionally update state/outbox records, coordinate stock-key processing, and publish through an outbox relay.
 
+## Asynchronous CSV imports
+
+- Accept a multipart `file` with the required `sellerId`, `productId`, `sizeId`, `countryCode`, `availableQuantity`, and `sourceVersion` headers. Validate the CSV structure and headers before accepting the upload; validate row values asynchronously.
+- Return `202 Accepted` with a job ID and status URL. Job states are `QUEUED`, `PROCESSING`, `COMPLETED`, `COMPLETED_WITH_ERRORS`, and `FAILED`.
+- `processedRows` counts every row that has an outcome. `succeededRows` counts completed processing, `skippedRows` counts stale or duplicate versions, and `failedRows` counts invalid rows and downstream errors. A stale row is not a failure and does not stop the rest of the upload.
+- A transient downstream error after the shared processor exhausts its immediate attempts is recorded as a failed row result for that job. Its durable stock/outbox operation may still be completed by the recovery worker later; the job report describes the original row-processing attempt.
+- Limit uploads to 10 MB. Run at most two import jobs at once with two queued; process rows sequentially within each job so a large upload cannot fan out unbounded downstream calls. Reject a full queue with `503`.
+- Keep job status and row results in memory for this local exercise, retaining the latest 20 jobs and evicting older terminal jobs as needed. They are lost on application restart, unlike stock/outbox state, which is file-backed in H2.
+- Until snapshot matching is implemented, each valid CSV row uses the existing single-item Product Context lookup. The next TODO item will fetch and index one snapshot per distinct country.
+
 ## Manual verification
 
 Import `postman/size-level-availability.postman_collection.json` and send requests 1–5 in order. To reset the version sequence, stop the app and remove only `data\availability.mv.db` before restarting:

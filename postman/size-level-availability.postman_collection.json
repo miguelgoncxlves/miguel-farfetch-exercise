@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "492dfcd1-fabf-4f70-a33a-d73ec2ea4fb8",
     "name": "Size-Level Availability Exercise",
-    "description": "Collection for processing inventory events, testing stock-version ordering, and manually calling downstream WireMock endpoints.",
+    "description": "Collection for processing inventory events, testing stock-version ordering, importing CSV jobs, and manually calling downstream WireMock endpoints.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -574,6 +574,109 @@
       ]
     },
     {
+      "name": "Bulk CSV imports",
+      "description": "Use the smoke CSV for a small end-to-end import. After importing this collection, select wiremock\\__files\\bulk-smoke.csv in the file field of the upload request. The smoke file includes a stale row, so run the baseline request first.",
+      "item": [
+        {
+          "name": "Prime stale version baseline (send first)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"csv-smoke-baseline\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-11-12T19:00:00Z\",\"sellerId\":\"csv-smoke-stale\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":8}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Run once before the smoke upload. Establishes version 8 for seller csv-smoke-stale so the CSV's version-7 row is skipped."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit smoke CSV import",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/v1/availability/imports",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "availability",
+                "imports"
+              ]
+            },
+            "description": "Select wiremock\\__files\\bulk-smoke.csv for the file form field. Expect 202 Accepted; the test script saves the returned job ID for the status request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Import accepted\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "pm.collectionVariables.set(\"importJobId\", pm.response.json().jobId);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Check import job status (repeat until terminal)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{appBaseUrl}}/v1/availability/imports/{{importJobId}}",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "availability",
+                "imports",
+                "{{importJobId}}"
+              ]
+            },
+            "description": "Repeat until state is COMPLETED_WITH_ERRORS. For the smoke file after the baseline request, expect 4 total/processed rows: 1 succeeded, 1 skipped as stale_version, and 2 failed."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "6. Look up product context (WireMock)",
       "request": {
         "method": "GET",
@@ -797,6 +900,11 @@
     {
       "key": "outputOccurredAt",
       "value": "2026-10-20T08:01:00Z",
+      "type": "string"
+    },
+    {
+      "key": "importJobId",
+      "value": "",
       "type": "string"
     }
   ]

@@ -1,6 +1,6 @@
 # Start Here: Size-Level Availability Exercise
 
-This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, durable stock-version ordering, bounded retries, and a local outbox. Bulk imports remain to be implemented.
+This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, durable stock-version ordering, bounded retries, a local outbox, and asynchronous CSV import jobs. Snapshot-based context matching remains to be implemented.
 
 | Document | Use it for |
 |---|---|
@@ -17,8 +17,8 @@ The product and inventory scenario, APIs, contracts, and figures are hypothetica
 | Service capability | Status / provided component |
 |---|---|
 | `POST /_dev/messages` for test input events | Implemented; sample event JSON file provided |
-| CSV upload and job-status endpoints | To implement; 10,000-row CSV provided |
-| Shared processing and asynchronous bulk work | Single-event flow implemented; Product Context and snapshot APIs provided |
+| CSV upload and job-status endpoints | Implemented; 10,000-row CSV provided |
+| Shared processing and asynchronous bulk work | Implemented through the event processor; snapshot matching is the next optimization |
 | Calls that update availability and publish output events | Implemented for single events; Availability API and output-event HTTP mocks provided |
 | Stock version ordering, partial-failure recovery, and transient dependency retries | Implemented with a local H2 file-backed state/outbox; retries `429`/`503` up to three total attempts |
 
@@ -81,13 +81,32 @@ Automatic recovery continues for pending operations after transient failures and
 
 The [Postman collection](postman/size-level-availability.postman_collection.json) includes a sequence for manually exercising initial, duplicate, stale, newer, and independent-seller versions. A fresh version-ordering test requires clearing the local H2 state; restarting the app alone no longer resets it.
 
-## 3. Inspect the calls your service made
+## 3. Submit a bulk CSV import
+
+The import endpoint accepts a `multipart/form-data` file field named `file`. The CSV must contain `sellerId`, `productId`, `sizeId`, `countryCode`, `availableQuantity`, and `sourceVersion` headers (in any order); additional columns are ignored. Missing headers, malformed CSV structure, and header-only files are rejected synchronously. Invalid field values and downstream errors are reported per row, and processing continues with the remaining rows.
+
+An accepted upload returns `202 Accepted` with a `jobId`, an initial state, the data-row count, and a status URL. Poll that URL until the state is `COMPLETED`, `COMPLETED_WITH_ERRORS`, or `FAILED`. `processedRows` includes successful, skipped, and failed rows; `succeededRows`, `skippedRows`, and `failedRows` distinguish the outcomes. Stale and duplicate versions are skipped, not failed. Each row result includes its CSV record number (the header is record 1), status, and a reason or error message where applicable.
+
+The importer has two worker threads and a queue for two additional jobs; rows in each job are processed sequentially through the same business service as event ingress. Uploads are limited to 10 MB. If the queue is full, the request receives `503 Service Unavailable` and is not accepted. Job status and row results are held in memory; the latest 20 jobs are retained, and status is lost if the application restarts. Stock and outbox state remains in H2. A row whose transient downstream attempts are exhausted is reported as failed for that job, although its durable outbox operation may later complete through recovery.
+
+For a small end-to-end check, first run the Postman folder's “Prime stale version baseline” request, then upload `wiremock\__files\bulk-smoke.csv` and poll the returned job URL. The smoke file should finish with one succeeded row, one stale row skipped, and two failed rows (invalid country code and unknown product). The supplied `bulk-stock.csv` has 10,000 rows and can also be uploaded:
+
+```powershell
+$response = curl.exe --silent --show-error --request POST "http://localhost:5000/v1/availability/imports" `
+  --form "file=@wiremock\__files\bulk-stock.csv;type=text/csv" | ConvertFrom-Json
+$response
+Invoke-RestMethod -Uri "http://localhost:5000$($response.statusUrl)"
+```
+
+At this stage, each valid row uses the single-item Product Context API; the next TODO item replaces those per-row calls with one snapshot per distinct country.
+
+## 4. Inspect the calls your service made
 
 Open `http://localhost:8080/__admin/requests` in Chrome to inspect the requests WireMock received, including request bodies. This is WireMock's request journal, not an application dashboard.
 
 For a fresh sample event your service applies, expect a Product Context lookup, an availability write, and an output-event POST. The original `POST /_dev/messages` request goes to your app, so it will not appear in WireMock's journal.
 
-## 4. Reset or stop the mocks
+## 5. Reset or stop the mocks
 
 To clear only the request journal while leaving the mappings running, use PowerShell:
 
