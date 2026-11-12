@@ -172,6 +172,408 @@
       "response": []
     },
     {
+      "name": "Validation and retry edge cases",
+      "description": "Send these requests individually. Validation and context rejection requests should not write availability or publish output. Availability 429/503 cases leave durable work pending; with recovery enabled, the worker can retry in later five-second cycles. Set AVAILABILITY_OUTBOX_RECOVERY_ENABLED=false while starting the app if you want to inspect only the initial three attempts.",
+      "item": [
+        {
+          "name": "Invalid event type (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"invalid-event-type\",\"eventType\":\"InventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 400. The app rejects the unsupported event type before any WireMock request."
+          },
+          "response": []
+        },
+        {
+          "name": "Unsupported schema version (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"invalid-schema-version\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":2,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 400. Only schema version 1 is supported; no WireMock request should be made."
+          },
+          "response": []
+        },
+        {
+          "name": "Negative available quantity (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"negative-quantity\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":-1,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 400 from input validation; no downstream request."
+          },
+          "response": []
+        },
+        {
+          "name": "Lowercase country code (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"lowercase-country\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"pt\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 400 because countryCode must be two uppercase letters; no downstream request."
+          },
+          "response": []
+        },
+        {
+          "name": "Negative source version (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"negative-source-version\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":-1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 400 from input validation; no downstream request."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown product (expect 422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"unknown-product\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-100000\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 422 after one Product Context 404; no availability write or output event."
+          },
+          "response": []
+        },
+        {
+          "name": "Inactive product (expect 422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"inactive-product\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-9999\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 422 after a Product Context response with productStatus INACTIVE; no availability write or output event."
+          },
+          "response": []
+        },
+        {
+          "name": "Country-disabled product (expect 422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"country-disabled-product\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-9998\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 422 after Product Context reports countryEnabled false; no availability write or output event."
+          },
+          "response": []
+        },
+        {
+          "name": "Product Context 503 retry (expect 502)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"product-context-503\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-90002\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 502 after three Product Context GET attempts. This fixture has no Retry-After, so delays are approximately 100ms and 200ms; no writes or publication."
+          },
+          "response": []
+        },
+        {
+          "name": "Product Context 429 Retry-After (expect 502)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"product-context-429\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"boutique-42\",\"productId\":\"style-90001\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 502 after three Product Context GET attempts. The fixture's Retry-After: 5 means about ten seconds of waiting; no writes or publication."
+          },
+          "response": []
+        },
+        {
+          "name": "Availability 503 retry (expect 502)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"availability-503\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"seller-503\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 502, one successful context GET, and three availability PUT attempts; no output event. The durable pending PUT is retried by recovery while enabled."
+          },
+          "response": []
+        },
+        {
+          "name": "Availability 429 Retry-After (expect 502)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"availability-429\",\"eventType\":\"SellerInventoryChanged\",\"schemaVersion\":1,\"occurredAt\":\"2026-10-20T08:00:00Z\",\"sellerId\":\"seller-429\",\"productId\":\"style-123\",\"sizeId\":\"size-38\",\"countryCode\":\"PT\",\"availableQuantity\":3,\"sourceVersion\":7}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{appBaseUrl}}/_dev/messages",
+              "host": [
+                "{{appBaseUrl}}"
+              ],
+              "path": [
+                "_dev",
+                "messages"
+              ]
+            },
+            "description": "Expected: HTTP 502, one successful context GET, and three availability PUT attempts. The fixture's Retry-After: 5 means about ten seconds of waiting; no output event."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "6. Look up product context (WireMock)",
       "request": {
         "method": "GET",
