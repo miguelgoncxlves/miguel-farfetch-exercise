@@ -37,7 +37,7 @@ Bulk CSV ---------------------> POST /v1/availability/imports
                                   +--> PROVIDED: output-event HTTP sink
 ```
 
-No real broker is needed. You send the sample input to your app over HTTP; your app sends the transformed output to the provided HTTP sink. The production broker is a design choice to explain, not infrastructure you must run.
+No real broker is needed. You send the sample input to your app over HTTP; your app sends the transformed output to the provided HTTP sink. The production broker recommendation and comparison are documented in [DECISIONS](DECISIONS.md), but are not infrastructure you must run.
 
 > **Security warning:** WireMock's admin endpoints are unauthenticated. The Compose port must bind only to `127.0.0.1`; the admin endpoints must not be exposed to any network.
 
