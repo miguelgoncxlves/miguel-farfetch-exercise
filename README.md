@@ -18,8 +18,8 @@ The product and inventory scenario, APIs, contracts, and figures are hypothetica
 |---|---|
 | `POST /_dev/messages` for test input events | Implemented; sample event JSON file provided |
 | CSV upload and job-status endpoints | Implemented; 10,000-row CSV provided |
-| Shared processing and asynchronous bulk work | Implemented through the event processor; snapshot matching is the next optimization |
-| Calls that update availability and publish output events | Implemented for single events; Availability API and output-event HTTP mocks provided |
+| Shared processing and asynchronous bulk work | Implemented through the event processor and country-level Product Context snapshots |
+| Calls that update availability and publish output events | Implemented through shared processing for single events and bulk rows; HTTP mocks provided |
 | Stock version ordering, partial-failure recovery, and transient dependency retries | Implemented with a local H2 file-backed state/outbox; retries `429`/`503` up to three total attempts |
 
 The assignment PDF includes the blue **YOUR SOLUTION HERE** diagram, already rendered and available offline. This plain-text version also works in Markdown viewers:
@@ -98,13 +98,19 @@ $response
 Invoke-RestMethod -Uri "http://localhost:5000$($response.statusUrl)"
 ```
 
-At this stage, each valid row uses the single-item Product Context API; the next TODO item replaces those per-row calls with one snapshot per distinct country.
+For each upload, the importer fetches one Product Context snapshot per distinct valid country and matches rows through a sparse hash index keyed by `(productId, sizeId, countryCode)`. This avoids a Product Context HTTP call per row. If there are `R` valid rows and `N_c` snapshot entries for each country `c`, expected indexing and matching time is `O(R + sum(N_c))`; each row lookup is expected `O(1)`. The index retains only `M_c` entries requested by the CSV, for `O(R + sum(M_c))` retained lookup space. Snapshot responses are deserialized and indexed one country at a time, so peak temporary snapshot memory is `O(max(N_c))`. The stock-version key still includes `sellerId`; Product Context does not.
+
+The provided 10,000-row file and 50,000-entry PT snapshot require one snapshot scan (50,000 entries) rather than up to 10,000 per-row HTTP lookups or 500 million comparisons from scanning the entire snapshot for every row. The snapshot is consistent for the duration of the import; changes made after retrieval are not reflected in that job. Missing Product Context entries fail only their rows, snapshot request failures fail rows for that country, and other countries continue.
+
+Snapshot matching does not remove the required per-row Availability PUT and output-event POST; these downstream operations remain the main throughput limit for a large all-success import.
 
 ## 4. Inspect the calls your service made
 
 Open `http://localhost:8080/__admin/requests` in Chrome to inspect the requests WireMock received, including request bodies. This is WireMock's request journal, not an application dashboard.
 
 For a fresh sample event your service applies, expect a Product Context lookup, an availability write, and an output-event POST. The original `POST /_dev/messages` request goes to your app, so it will not appear in WireMock's journal.
+
+For a CSV import, expect one snapshot GET per distinct valid country. Each successful row still produces one availability PUT and one output-event POST; stale, duplicate, invalid, and missing-context rows do not produce those writes.
 
 ## 5. Reset or stop the mocks
 

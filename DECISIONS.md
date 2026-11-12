@@ -44,7 +44,25 @@ This document records the behavior and trade-offs chosen for the Java 21 size-le
 - A transient downstream error after the shared processor exhausts its immediate attempts is recorded as a failed row result for that job. Its durable stock/outbox operation may still be completed by the recovery worker later; the job report describes the original row-processing attempt.
 - Limit uploads to 10 MB. Run at most two import jobs at once with two queued; process rows sequentially within each job so a large upload cannot fan out unbounded downstream calls. Reject a full queue with `503`.
 - Keep job status and row results in memory for this local exercise, retaining the latest 20 jobs and evicting older terminal jobs as needed. They are lost on application restart, unlike stock/outbox state, which is file-backed in H2.
-- Until snapshot matching is implemented, each valid CSV row uses the existing single-item Product Context lookup. The next TODO item will fetch and index one snapshot per distinct country.
+- Validate CSV rows before fetching context so invalid rows do not trigger snapshot requests. Fetch one snapshot for each distinct valid country in the upload, using the existing retry policy for transient failures.
+- Build a sparse `HashMap` index with a composite record key `(productId, sizeId, countryCode)`. First collect the distinct keys requested by the upload, then scan each snapshot once and retain only matching entries. `sellerId` stays out of this context key and remains part of `StockKey`, because sellers share product metadata but have independent stock versions.
+- Resolve a row's context through the shared processing service after stale/duplicate version checks. Thus an old or completed duplicate remains skipped without requiring a context entry. A missing entry fails only that row; a snapshot fetch failure marks applicable rows as failed and does not stop other countries.
+- The snapshot is an upload-time view: later Product Context changes do not affect that job. Each active import job retains its row data, results, and sparse indexes until completion; at most two jobs run concurrently.
+
+### Product Context matching complexity
+
+Let `R_c` be the number of valid CSV rows for country `c`, `R = sum(R_c)`, `N_c` the number of entries in that country's snapshot, and `M_c` the number of distinct requested row keys found there (`M_c <= min(R_c, N_c)`). Snapshot responses are unordered, so the importer scans each entry once; hashing and matching are expected constant time per key.
+
+| Strategy | Context HTTP calls | Expected matching time | Retained lookup space | Trade-off |
+|---|---:|---:|---:|---|
+| Single-item lookup per row | `R` | `O(R)` local work plus `R` network round trips | `O(R)` row/job state | Avoids snapshot memory, but repeats network latency and metadata reads. |
+| Scan full snapshot for every row | One per country | `O(sum(R_c * N_c))` | `O(R)` row/job state | Low index memory, but 10,000 rows against 50,000 contexts can require about 500 million comparisons. |
+| Hash-index every snapshot entry | One per country | `O(R + sum(N_c))` | `O(R + sum(N_c))` | Fast lookups, but retains contexts no row will use. |
+| **Chosen: sparse hash index of requested keys** | **One per country** | **Expected `O(R + sum(N_c))`** | **`O(R + sum(M_c))` retained** | **Same optimal scan-and-match time, while retaining only contexts the upload can use.** |
+
+For the supplied one-country fixture, `R = 10,000` and `N_PT = 50,000`; the chosen design scans the 50,000-entry response once and indexes at most 10,000 requested context keys. The response list itself is temporarily materialized, so per-job peak additional snapshot memory is `O(max(N_c))` before that response becomes eligible for collection. The row list and job results already require `O(R)` space. These bounds are per job; two concurrent imports can approximately double the live working set. The `HashMap` bounds are expected-case bounds, as usual for hash-based lookup.
+
+For unordered snapshots without a server-side filter for requested keys, an exact join must inspect every valid row and every snapshot entry, giving a lower bound of `Omega(R + sum(N_c))`. The sparse index reaches that bound in expected time while avoiding retention of irrelevant snapshot contexts. It reduces only Product Context work: each successful row still requires an Availability PUT and output-event POST.
 
 ## Manual verification
 

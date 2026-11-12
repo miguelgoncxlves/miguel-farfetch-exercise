@@ -4,10 +4,14 @@ import com.example.availability.api.ImportAcceptedResponse;
 import com.example.availability.api.ImportJobStatusResponse;
 import com.example.availability.api.ImportRowResult;
 import com.example.availability.api.SellerInventoryChanged;
+import com.example.availability.client.ProductContextClient;
+import com.example.availability.model.ProductContextSnapshotEntry;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import java.io.IOException;
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +36,7 @@ public class CsvImportService {
     private static final int MAX_RETAINED_JOBS = 20;
 
     private final AvailabilityProcessingService processingService;
+    private final ProductContextClient productContextClient;
     private final TaskExecutor executor;
     private final Validator validator;
     private final Clock clock;
@@ -40,10 +45,12 @@ public class CsvImportService {
 
     public CsvImportService(
             AvailabilityProcessingService processingService,
+            ProductContextClient productContextClient,
             @Qualifier("availabilityImportExecutor") TaskExecutor executor,
             Validator validator,
             Clock clock) {
         this.processingService = processingService;
+        this.productContextClient = productContextClient;
         this.executor = executor;
         this.validator = validator;
         this.clock = clock;
@@ -106,8 +113,13 @@ public class CsvImportService {
     private void process(CsvImportJob job, List<CsvImportRow> rows) {
         job.start();
         try {
-            for (CsvImportRow row : rows) {
-                job.record(processRow(job, row));
+            List<PreparedRow> preparedRows = rows.stream()
+                    .map(row -> prepareRow(job.jobId(), row))
+                    .toList();
+            Map<String, ProductContextSnapshotIndex> contextIndexes =
+                    loadContextIndexes(preparedRows);
+            for (PreparedRow row : preparedRows) {
+                job.record(processRow(row, contextIndexes));
             }
             job.complete();
         } catch (RuntimeException exception) {
@@ -116,12 +128,12 @@ public class CsvImportService {
         }
     }
 
-    private ImportRowResult processRow(CsvImportJob job, CsvImportRow row) {
+    private PreparedRow prepareRow(String jobId, CsvImportRow row) {
         SellerInventoryChanged event;
         try {
-            event = toEvent(job.jobId(), row);
+            event = toEvent(jobId, row);
         } catch (RowValidationException exception) {
-            return CsvImportJob.failed(row.rowNumber(), exception.getMessage());
+            return PreparedRow.failed(row, exception.getMessage());
         }
 
         Set<ConstraintViolation<SellerInventoryChanged>> violations = validator.validate(event);
@@ -130,22 +142,70 @@ public class CsvImportService {
                     .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
                     .sorted()
                     .collect(Collectors.joining("; "));
-            return CsvImportJob.failed(row.rowNumber(), message);
+            return PreparedRow.failed(row, message);
+        }
+        return PreparedRow.valid(row, event);
+    }
+
+    private Map<String, ProductContextSnapshotIndex> loadContextIndexes(
+            List<PreparedRow> rows) {
+        Map<String, Set<ProductContextKey>> requestedKeysByCountry = new LinkedHashMap<>();
+        for (PreparedRow row : rows) {
+            if (row.event() != null) {
+                requestedKeysByCountry
+                        .computeIfAbsent(row.event().countryCode(), ignored -> new HashSet<>())
+                        .add(ProductContextSnapshotIndex.keyFor(row.event()));
+            }
         }
 
+        Map<String, ProductContextSnapshotIndex> indexes = new HashMap<>();
+        for (Map.Entry<String, Set<ProductContextKey>> entry : requestedKeysByCountry.entrySet()) {
+            String countryCode = entry.getKey();
+            try {
+                indexes.put(
+                        countryCode,
+                        loadContextIndex(countryCode, entry.getValue()));
+            } catch (RestClientException exception) {
+                logger.warn(
+                        "Could not load Product Context snapshot for country {}.",
+                        countryCode,
+                        exception);
+                indexes.put(countryCode, ProductContextSnapshotIndex.unavailable());
+            }
+        }
+        return indexes;
+    }
+
+    private ProductContextSnapshotIndex loadContextIndex(
+            String countryCode, Set<ProductContextKey> requestedKeys) {
+        List<ProductContextSnapshotEntry> snapshot =
+                productContextClient.getSnapshot(countryCode);
+        return ProductContextSnapshotIndex.create(countryCode, snapshot, requestedKeys);
+    }
+
+    private ImportRowResult processRow(
+            PreparedRow row, Map<String, ProductContextSnapshotIndex> contextIndexes) {
+        if (row.failureMessage() != null) {
+            return CsvImportJob.failed(row.row().rowNumber(), row.failureMessage());
+        }
+
+        SellerInventoryChanged event = row.event();
+        ProductContextSnapshotIndex contextIndex = contextIndexes.get(event.countryCode());
         try {
-            ProcessingResult result = processingService.process(event);
+            ProcessingResult result = processingService.process(
+                    event, () -> contextIndex.resolve(event));
             if ("processed".equals(result.status())) {
-                return CsvImportJob.succeeded(row.rowNumber());
+                return CsvImportJob.succeeded(row.row().rowNumber());
             }
             if ("skipped".equals(result.status())) {
-                return CsvImportJob.skipped(row.rowNumber(), result.reason());
+                return CsvImportJob.skipped(row.row().rowNumber(), result.reason());
             }
             throw new IllegalStateException("Unsupported processing result: " + result.status());
         } catch (ProductContextNotAvailableException | InvalidInventoryEventException exception) {
-            return CsvImportJob.failed(row.rowNumber(), exception.getMessage());
+            return CsvImportJob.failed(row.row().rowNumber(), exception.getMessage());
         } catch (RestClientException exception) {
-            return CsvImportJob.failed(row.rowNumber(), "A downstream service request failed.");
+            return CsvImportJob.failed(
+                    row.row().rowNumber(), "A downstream service request failed.");
         }
     }
 
@@ -181,6 +241,18 @@ public class CsvImportService {
 
         private RowValidationException(String message) {
             super(message);
+        }
+    }
+
+    private record PreparedRow(
+            CsvImportRow row, SellerInventoryChanged event, String failureMessage) {
+
+        private static PreparedRow valid(CsvImportRow row, SellerInventoryChanged event) {
+            return new PreparedRow(row, event, null);
+        }
+
+        private static PreparedRow failed(CsvImportRow row, String message) {
+            return new PreparedRow(row, null, message);
         }
     }
 }
