@@ -10,20 +10,25 @@ import org.springframework.web.client.RestClient;
 public class AvailabilityClient {
 
     private final RestClient restClient;
+    private final DownstreamRetryExecutor retryExecutor;
 
-    public AvailabilityClient(RestClient restClient) {
+    public AvailabilityClient(RestClient restClient, DownstreamRetryExecutor retryExecutor) {
         this.restClient = restClient;
+        this.retryExecutor = retryExecutor;
     }
 
     public void update(
             SellerInventoryChanged event, CanonicalProductContext productContext) {
         AvailabilityUpdate update = new AvailabilityUpdate(
                 event.availableQuantity(), event.sourceVersion(), productContext);
-        restClient.put()
-                .uri("/v1/availability/{sellerId}/{productId}/{sizeId}?countryCode={countryCode}",
-                        event.sellerId(), event.productId(), event.sizeId(), event.countryCode())
-                .body(update)
-                .retrieve()
-                .toBodilessEntity();
+        retryExecutor.execute(() -> {
+            restClient.put()
+                    .uri("/v1/availability/{sellerId}/{productId}/{sizeId}?countryCode={countryCode}",
+                            event.sellerId(), event.productId(), event.sizeId(), event.countryCode())
+                    .body(update)
+                    .retrieve()
+                    .toBodilessEntity();
+            return null;
+        });
     }
 }

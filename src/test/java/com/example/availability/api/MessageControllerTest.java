@@ -4,11 +4,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.availability.service.AvailabilityProcessingService;
+import com.example.availability.service.ProcessingResult;
 import com.example.availability.service.ProductContextNotAvailableException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +33,9 @@ class MessageControllerTest {
 
     @Test
     void acceptsValidInventoryEvent() throws Exception {
+        when(processingService.process(any(SellerInventoryChanged.class)))
+                .thenReturn(ProcessingResult.processed());
+
         mockMvc.perform(post("/_dev/messages")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validEvent()))
@@ -49,6 +54,19 @@ class MessageControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(processingService, never()).process(any());
+    }
+
+    @Test
+    void reportsSkippedVersionInResponse() throws Exception {
+        when(processingService.process(any(SellerInventoryChanged.class)))
+                .thenReturn(ProcessingResult.skipped("stale_version"));
+
+        mockMvc.perform(post("/_dev/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validEvent()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("skipped"))
+                .andExpect(jsonPath("$.reason").value("stale_version"));
     }
 
     @Test

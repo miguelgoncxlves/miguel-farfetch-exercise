@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "492dfcd1-fabf-4f70-a33a-d73ec2ea4fb8",
     "name": "Size-Level Availability Exercise",
-    "description": "Collection for processing one inventory event and manually testing its downstream WireMock endpoints.",
+    "description": "Collection for processing inventory events, testing stock-version ordering, and manually calling downstream WireMock endpoints.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -35,12 +35,144 @@
             "messages"
           ]
         },
-        "description": "Runs the complete single-event flow. The app performs the Product Context lookup, availability update, and output-event publish against WireMock."
+        "description": "First request in the version-ordering sequence. Restart the app before a fresh sequence; this version should be processed."
       },
       "response": []
     },
     {
-      "name": "2. Look up product context (WireMock)",
+      "name": "2. Replay same version (expect duplicate skip)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{replayEventId}}\",\n  \"eventType\": \"SellerInventoryChanged\",\n  \"schemaVersion\": 1,\n  \"occurredAt\": \"{{occurredAt}}\",\n  \"sellerId\": \"{{sellerId}}\",\n  \"productId\": \"{{productId}}\",\n  \"sizeId\": \"{{sizeId}}\",\n  \"countryCode\": \"{{countryCode}}\",\n  \"availableQuantity\": {{availableQuantity}},\n  \"sourceVersion\": {{sourceVersion}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{appBaseUrl}}/_dev/messages",
+          "host": [
+            "{{appBaseUrl}}"
+          ],
+          "path": [
+            "_dev",
+            "messages"
+          ]
+        },
+        "description": "Send after request 1. Uses the same stock key and version but a different eventId; expect skipped/duplicate_version and no new WireMock requests."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Submit older version (expect stale skip)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{staleEventId}}\",\n  \"eventType\": \"SellerInventoryChanged\",\n  \"schemaVersion\": 1,\n  \"occurredAt\": \"{{occurredAt}}\",\n  \"sellerId\": \"{{sellerId}}\",\n  \"productId\": \"{{productId}}\",\n  \"sizeId\": \"{{sizeId}}\",\n  \"countryCode\": \"{{countryCode}}\",\n  \"availableQuantity\": {{availableQuantity}},\n  \"sourceVersion\": {{staleSourceVersion}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{appBaseUrl}}/_dev/messages",
+          "host": [
+            "{{appBaseUrl}}"
+          ],
+          "path": [
+            "_dev",
+            "messages"
+          ]
+        },
+        "description": "Send after request 1. Uses the same stock key with an older sourceVersion; expect skipped/stale_version and no new WireMock requests."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Submit newer version (expect processing)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{newerEventId}}\",\n  \"eventType\": \"SellerInventoryChanged\",\n  \"schemaVersion\": 1,\n  \"occurredAt\": \"{{occurredAt}}\",\n  \"sellerId\": \"{{sellerId}}\",\n  \"productId\": \"{{productId}}\",\n  \"sizeId\": \"{{sizeId}}\",\n  \"countryCode\": \"{{countryCode}}\",\n  \"availableQuantity\": {{availableQuantity}},\n  \"sourceVersion\": {{newerSourceVersion}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{appBaseUrl}}/_dev/messages",
+          "host": [
+            "{{appBaseUrl}}"
+          ],
+          "path": [
+            "_dev",
+            "messages"
+          ]
+        },
+        "description": "Send after requests 1–3. This higher version should be processed and create three new downstream WireMock requests."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Lower version on another seller (expect processing)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{independentEventId}}\",\n  \"eventType\": \"SellerInventoryChanged\",\n  \"schemaVersion\": 1,\n  \"occurredAt\": \"{{occurredAt}}\",\n  \"sellerId\": \"{{independentSellerId}}\",\n  \"productId\": \"{{productId}}\",\n  \"sizeId\": \"{{sizeId}}\",\n  \"countryCode\": \"{{countryCode}}\",\n  \"availableQuantity\": {{availableQuantity}},\n  \"sourceVersion\": {{staleSourceVersion}}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{appBaseUrl}}/_dev/messages",
+          "host": [
+            "{{appBaseUrl}}"
+          ],
+          "path": [
+            "_dev",
+            "messages"
+          ]
+        },
+        "description": "Send after request 1. A distinct seller has an independent version stream, so the lower version should be processed."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Look up product context (WireMock)",
       "request": {
         "method": "GET",
         "header": [],
@@ -68,7 +200,7 @@
       "response": []
     },
     {
-      "name": "3. Write availability (WireMock)",
+      "name": "7. Write availability (WireMock)",
       "request": {
         "method": "PUT",
         "header": [
@@ -110,7 +242,7 @@
       "response": []
     },
     {
-      "name": "4. Publish output event (WireMock)",
+      "name": "8. Publish output event (WireMock)",
       "request": {
         "method": "POST",
         "header": [
@@ -193,6 +325,41 @@
     {
       "key": "sourceVersion",
       "value": "7",
+      "type": "string"
+    },
+    {
+      "key": "replayEventId",
+      "value": "msg-0001-replay",
+      "type": "string"
+    },
+    {
+      "key": "staleEventId",
+      "value": "msg-stale",
+      "type": "string"
+    },
+    {
+      "key": "staleSourceVersion",
+      "value": "6",
+      "type": "string"
+    },
+    {
+      "key": "newerEventId",
+      "value": "msg-0002",
+      "type": "string"
+    },
+    {
+      "key": "newerSourceVersion",
+      "value": "8",
+      "type": "string"
+    },
+    {
+      "key": "independentEventId",
+      "value": "msg-independent",
+      "type": "string"
+    },
+    {
+      "key": "independentSellerId",
+      "value": "boutique-43",
       "type": "string"
     },
     {

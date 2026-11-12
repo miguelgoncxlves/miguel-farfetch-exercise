@@ -41,6 +41,12 @@ Check `http://localhost:5000/health`; a running application responds with:
 
 Override the application port with `SERVER_PORT` or the mock-service base URL with `WIREMOCK_BASE_URL`. Defaults are `5000` and `http://localhost:8080`, respectively.
 
+## Version ordering and retries
+
+The service keeps the latest applied version and any pending output publication in memory, keyed by seller, product, size, and country. Restarting the app clears this state, and separate app instances do not share it. Older versions and completed duplicate versions are skipped. For downstream HTTP `429` and `503` responses, the service makes up to three total attempts, honoring `Retry-After` when present; otherwise it starts at `100ms` and doubles the delay between attempts. Override these settings with `AVAILABILITY_RETRY_MAX_ATTEMPTS` and `AVAILABILITY_RETRY_BASE_DELAY`.
+
+The Postman collection has ordered requests for checking version behavior. Restart the app before a fresh run so the in-memory version state starts empty. For the full flow and mock reset commands, see the [README](README.md).
+
 ## Start the provided mocks
 
 Start Docker, then run this from the repository root:

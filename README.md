@@ -1,12 +1,13 @@
 # Start Here: Size-Level Availability Exercise
 
-This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event processing flow. Bulk imports and reliability controls remain to be implemented.
+This repository contains the assignment PDF, local mock dependencies, and a Java 21 service with the single-event flow, in-memory version ordering, and bounded retries. Bulk imports and durable recovery remain to be implemented.
 
 | Document | Use it for |
 |---|---|
 | [Assignment PDF](Take-Home%20Exercise_%20Size-Level%20Availability%20Processor.pdf) | Open in a PDF reader or browser to read the assignment, ownership diagram, contracts, business rules, and deliverables. |
 | [Run-Instructions](Run-Instructions.md) | Java 21 prerequisites and how to start the service locally. |
 | [TODO](TODO.md) | Ordered implementation plan, with the completed scaffold and remaining work. |
+| [Implementation Decisions](DECISIONS.md) | Behavior choices, retry/versioning rules, and current limitations. |
 | This README | How to start the mocks, send a sample event to your service, and inspect its calls. |
 
 The product and inventory scenario, APIs, contracts, and figures are hypothetical; they do not describe internal Farfetch systems. Extract this folder and run all commands below from the folder containing `compose.yaml`.
@@ -19,6 +20,7 @@ The product and inventory scenario, APIs, contracts, and figures are hypothetica
 | CSV upload and job-status endpoints | To implement; 10,000-row CSV provided |
 | Shared processing and asynchronous bulk work | Single-event flow implemented; Product Context and snapshot APIs provided |
 | Calls that update availability and publish output events | Implemented for single events; Availability API and output-event HTTP mocks provided |
+| Stock version ordering and transient dependency retries | Implemented in memory; retries `429`/`503` up to three total attempts |
 
 The assignment PDF includes the blue **YOUR SOLUTION HERE** diagram, already rendered and available offline. This plain-text version also works in Markdown viewers:
 
@@ -70,6 +72,10 @@ curl.exe --request POST "http://localhost:5000/_dev/messages" `
 Replace `5000` with your service's port, or use Postman or another HTTP client. The `@` tells curl to read the included JSON file as the request body. This example uses PowerShell command-line syntax, not a supplied script.
 
 The service looks up Product Context, writes availability, and POSTs its transformed `SizeAvailabilityUpdated` event to WireMock at `http://localhost:8080/mock-broker/v1/events`. Unknown products, inactive products, and products not enabled in the requested country return `422` without an availability write or output event. The WireMock route is an output sink only; it is not the inbound message endpoint or a real broker.
+
+For each `(sellerId, productId, sizeId, countryCode)` stock key, an older `sourceVersion` is skipped as `stale_version`, and a repeated completed version is skipped as `duplicate_version`. New versions are processed in order for that key. The service retries downstream `429` and `503` responses up to three total attempts, honoring `Retry-After` or using short exponential delays. Version and pending-publication state is in memory only; it resets on app restart and is not shared across multiple app instances.
+
+The [Postman collection](postman/size-level-availability.postman_collection.json) includes a sequence for manually exercising initial, duplicate, stale, newer, and independent-seller versions.
 
 ## 3. Inspect the calls your service made
 
