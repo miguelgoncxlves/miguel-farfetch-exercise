@@ -1,31 +1,29 @@
 package com.example.availability.version;
 
-import com.example.availability.model.SizeAvailabilityUpdated;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.Optional;
-import org.springframework.stereotype.Component;
 
-@Component
-public class InMemoryStockVersionStore {
+public class InMemoryStockVersionStore implements StockVersionStore {
 
     private final ConcurrentMap<StockKey, StockVersionState> states = new ConcurrentHashMap<>();
 
+    @Override
     public Optional<StockVersionState> state(StockKey key) {
         return Optional.ofNullable(states.get(key));
     }
 
-    public void markAvailabilityApplied(
-            StockKey key, long sourceVersion, SizeAvailabilityUpdated outputEvent) {
-        states.put(key, new StockVersionState(sourceVersion, outputEvent));
+    @Override
+    public void save(StockKey key, StockVersionState state) {
+        states.put(key, state);
     }
 
-    public void markOutputPublished(StockKey key, long sourceVersion) {
-        states.compute(key, (ignored, current) -> {
-            if (current == null || current.latestAppliedVersion() != sourceVersion) {
-                throw new IllegalStateException("Stock version state changed during processing.");
-            }
-            return new StockVersionState(sourceVersion, null);
-        });
+    @Override
+    public List<StockKey> pendingKeys() {
+        return states.entrySet().stream()
+                .filter(entry -> entry.getValue().isPending())
+                .map(entry -> entry.getKey())
+                .toList();
     }
 }

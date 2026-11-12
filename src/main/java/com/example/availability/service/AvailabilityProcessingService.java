@@ -7,22 +7,30 @@ import com.example.availability.client.ProductContextClient;
 import com.example.availability.model.CanonicalProductContext;
 import com.example.availability.model.ProductContext;
 import com.example.availability.model.SizeAvailabilityUpdated;
-import com.example.availability.version.InMemoryStockVersionStore;
+import com.example.availability.version.StockProcessingPhase;
 import com.example.availability.version.StockKey;
 import com.example.availability.version.StockKeyLockRegistry;
+import com.example.availability.version.StockVersionStore;
 import com.example.availability.version.StockVersionState;
 import java.time.Clock;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Service
 public class AvailabilityProcessingService {
 
+    private static final Logger logger =
+            LoggerFactory.getLogger(AvailabilityProcessingService.class);
+
     private final ProductContextClient productContextClient;
     private final AvailabilityClient availabilityClient;
     private final OutputEventPublisher outputEventPublisher;
-    private final InMemoryStockVersionStore versionStore;
+    private final StockVersionStore versionStore;
     private final StockKeyLockRegistry lockRegistry;
     private final Clock clock;
 
@@ -30,7 +38,7 @@ public class AvailabilityProcessingService {
             ProductContextClient productContextClient,
             AvailabilityClient availabilityClient,
             OutputEventPublisher outputEventPublisher,
-            InMemoryStockVersionStore versionStore,
+            StockVersionStore versionStore,
             StockKeyLockRegistry lockRegistry,
             Clock clock) {
         this.productContextClient = productContextClient;
@@ -54,16 +62,22 @@ public class AvailabilityProcessingService {
         try {
             StockVersionState state = versionStore.state(key).orElse(null);
             if (state != null) {
-                if (event.sourceVersion() < state.latestAppliedVersion()) {
+                if (event.sourceVersion() < state.sourceVersion()) {
                     return ProcessingResult.skipped("stale_version");
                 }
-                if (state.pendingOutputEvent() != null) {
-                    outputEventPublisher.publish(state.pendingOutputEvent());
-                    versionStore.markOutputPublished(key, state.latestAppliedVersion());
-                    if (event.sourceVersion() == state.latestAppliedVersion()) {
+                if (state.isPending()) {
+                    finishPendingOperation(key, state);
+                    if (event.sourceVersion() == state.sourceVersion()) {
                         return ProcessingResult.processed();
                     }
-                } else if (event.sourceVersion() == state.latestAppliedVersion()) {
+                } else if (state.isFailed()) {
+                    state = state.retry();
+                    versionStore.save(key, state);
+                    finishPendingOperation(key, state);
+                    if (event.sourceVersion() == state.sourceVersion()) {
+                        return ProcessingResult.processed();
+                    }
+                } else if (event.sourceVersion() == state.sourceVersion()) {
                     return ProcessingResult.skipped("duplicate_version");
                 }
             }
@@ -76,14 +90,65 @@ public class AvailabilityProcessingService {
             }
 
             CanonicalProductContext canonicalContext = context.canonical();
-            availabilityClient.update(event, canonicalContext);
             SizeAvailabilityUpdated outputEvent = toOutputEvent(event, canonicalContext);
-            versionStore.markAvailabilityApplied(key, event.sourceVersion(), outputEvent);
-            outputEventPublisher.publish(outputEvent);
-            versionStore.markOutputPublished(key, event.sourceVersion());
+            StockVersionState pendingState =
+                    StockVersionState.availabilityPending(event, canonicalContext, outputEvent);
+            versionStore.save(key, pendingState);
+            finishPendingOperation(key, pendingState);
             return ProcessingResult.processed();
         } finally {
             lock.unlock();
+        }
+    }
+
+    public void recoverPendingOperations() {
+        for (StockKey key : versionStore.pendingKeys()) {
+            ReentrantLock lock = lockRegistry.lockFor(key);
+            lock.lock();
+            try {
+                StockVersionState state = versionStore.state(key).orElse(null);
+                if (state != null && state.isPending()) {
+                    finishPendingOperation(key, state);
+                }
+            } catch (RestClientException exception) {
+                logger.warn(
+                        "Could not recover pending stock operation for {} at version {}.",
+                        key,
+                        versionStore.state(key).map(StockVersionState::sourceVersion).orElse(-1L),
+                        exception);
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void finishPendingOperation(StockKey key, StockVersionState state) {
+        if (state.phase() == StockProcessingPhase.AVAILABILITY_PENDING) {
+            try {
+                availabilityClient.update(state.inputEvent(), state.productContext());
+            } catch (RestClientResponseException exception) {
+                savePermanentFailure(key, state, exception);
+                throw exception;
+            }
+            state = state.publicationPending();
+            versionStore.save(key, state);
+        }
+        if (state.phase() == StockProcessingPhase.PUBLICATION_PENDING) {
+            try {
+                outputEventPublisher.publish(state.outputEvent());
+            } catch (RestClientResponseException exception) {
+                savePermanentFailure(key, state, exception);
+                throw exception;
+            }
+            versionStore.save(key, state.complete());
+        }
+    }
+
+    private void savePermanentFailure(
+            StockKey key, StockVersionState state, RestClientResponseException exception) {
+        int status = exception.getStatusCode().value();
+        if (status != 429 && status != 503) {
+            versionStore.save(key, state.failed());
         }
     }
 
