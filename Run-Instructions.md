@@ -47,7 +47,7 @@ The service stores stock versions and processing/outbox state in `data\availabil
 
 Older versions and completed duplicate versions are skipped. For downstream HTTP `429` and `503` responses, the service makes up to three total attempts, honoring `Retry-After` when present; otherwise it starts at `100ms` and doubles the delay between attempts. Override these settings with `AVAILABILITY_RETRY_MAX_ATTEMPTS` and `AVAILABILITY_RETRY_BASE_DELAY`.
 
-The Postman collection has ordered requests for checking version behavior. To reset state for a clean run, stop the app and remove only `data\availability.mv.db`, then restart it. For the full flow and mock reset commands, see the [README](README.md).
+The Postman collection has ordered requests for checking version behavior. To reset state for a clean run, stop the app and remove only `data\availability.mv.db`, then restart it. For the full flow and mock reset commands, see the [README](README.md). For requirement coverage, architecture diagrams, use-case outcomes, and trade-offs, see [ARCHITECTURE](ARCHITECTURE.md) and [DECISIONS](DECISIONS.md).
 
 ## CSV imports
 

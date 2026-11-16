@@ -6,8 +6,9 @@ This repository contains the assignment PDF, local mock dependencies, and a Java
 |---|---|
 | [Assignment PDF](Take-Home%20Exercise_%20Size-Level%20Availability%20Processor.pdf) | Open in a PDF reader or browser to read the assignment, ownership diagram, contracts, business rules, and deliverables. |
 | [Run-Instructions](Run-Instructions.md) | Java 21 prerequisites and how to start the service locally. |
-| [TODO](TODO.md) | Ordered implementation plan, with the completed scaffold and remaining work. |
+| [TODO](TODO.md) | Ordered implementation record; points 1-7 are complete. |
 | [Implementation Decisions](DECISIONS.md) | Behavior choices, retry/versioning rules, and current limitations. |
+| [Architecture and requirement coverage](ARCHITECTURE.md) | Requirement traceability, feature diagrams, use cases, tests, alternatives, and production improvements. |
 | This README | How to start the mocks, send a sample event to your service, and inspect its calls. |
 
 The product and inventory scenario, APIs, contracts, and figures are hypothetical; they do not describe internal Farfetch systems. Extract this folder and run all commands below from the folder containing `compose.yaml`.
@@ -21,6 +22,25 @@ The product and inventory scenario, APIs, contracts, and figures are hypothetica
 | Shared processing and asynchronous bulk work | Implemented through the event processor and country-level Product Context snapshots |
 | Calls that update availability and publish output events | Implemented through shared processing for single events and bulk rows; HTTP mocks provided |
 | Stock version ordering, partial-failure recovery, and transient dependency retries | Implemented with a local H2 file-backed state/outbox; retries `429`/`503` up to three total attempts |
+
+### Architecture at a glance
+
+```mermaid
+flowchart LR
+    Event["Sample event"] --> EventAPI["POST /_dev/messages"]
+    CSV["Bulk CSV"] --> Upload["POST /v1/availability/imports"]
+    Upload --> Jobs["Bounded async import jobs"]
+    Jobs --> Status["GET /v1/availability/imports/{jobId}"]
+    EventAPI --> Shared["Shared processing and version checks"]
+    Jobs --> Shared
+    Shared <--> H2[("H2 stock version and outbox")]
+    Shared --> Product["Product Context API or country snapshot"]
+    Shared --> Gateway["Availability API"]
+    Shared --> Sink["Output-event HTTP sink"]
+    Recovery["Outbox recovery"] --> Shared
+```
+
+The [architecture guide](ARCHITECTURE.md) traces each assignment requirement to its implementation and tests, and includes separate sequence/flow diagrams for event processing, version ordering, recovery, CSV jobs, and snapshot matching. It also lists happy paths, edge cases, failure behavior, design alternatives, and future production work.
 
 The assignment PDF includes the blue **YOUR SOLUTION HERE** diagram, already rendered and available offline. This plain-text version also works in Markdown viewers:
 
@@ -77,7 +97,7 @@ For each `(sellerId, productId, sizeId, countryCode)` stock key, an older `sourc
 
 The local H2 database stores stock versions and pending processing/outbox state in `data\availability.mv.db`. If availability succeeds but event publication fails, the same event (with its stable generated ID) remains pending and is retried by a background recovery task or an input replay. If the process crashes after the availability PUT but before recording that it succeeded, the PUT can be repeated; this relies on the PUT being idempotent for the same stock key and version. If publication succeeded but its acknowledgment was lost, publishing the same event ID again is possible, so downstream consumers should deduplicate. The file-backed H2 setup is for one local app instance; production multi-instance deployment needs a shared database with transactional state changes and coordination.
 
-Automatic recovery continues for pending operations after transient failures and transport errors. A non-retryable downstream HTTP response is recorded as a failed operation and is not polled automatically; replay the same event after correcting the dependency or data. A newer event for that stock key first attempts to finish the failed earlier operation, preserving order.
+Automatic recovery continues for pending operations after transient failures and transport errors. A non-retryable Availability PUT or output-publication HTTP response is recorded as a failed operation and is not polled automatically; replay the same event after correcting the dependency or data. A newer event for that stock key first attempts to finish the failed earlier operation, preserving order. A Product Context `404` is treated as an ineligible/missing context (`422`) before any outbox operation is created.
 
 The [Postman collection](postman/size-level-availability.postman_collection.json) includes a sequence for manually exercising initial, duplicate, stale, newer, and independent-seller versions. A fresh version-ordering test requires clearing the local H2 state; restarting the app alone no longer resets it.
 

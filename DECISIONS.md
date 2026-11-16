@@ -29,7 +29,7 @@ Use at-least-once delivery rather than assuming a transaction spans the broker, 
 
 - Scope stock versions to `(sellerId, productId, sizeId, countryCode)`. Seller identity matters for stock, even though Product Context is looked up by product, size, and country.
 - Skip a lower version as `stale_version`. Skip an already completed equal version as `duplicate_version`; neither case calls a downstream service.
-- Use 64 striped locks to serialize same-key updates. Different keys can proceed concurrently unless they map to the same stripe. The shared processing service is intended to be used by both event and future CSV paths.
+- Use 64 striped locks to serialize same-key updates. Different keys can proceed concurrently unless they map to the same stripe. The same processing service is used by both event and CSV paths.
 
 ## Dependency retries
 
@@ -43,7 +43,7 @@ Use at-least-once delivery rather than assuming a transaction spans the broker, 
 - Persist an `AVAILABILITY_PENDING` record, including the input, canonical context, and output event with a stable generated ID, before calling the Availability API. This gives recovery enough information to resume without repeating the Product Context lookup.
 - After the PUT succeeds, persist `PUBLICATION_PENDING` before publishing. After the publisher accepts the event, mark the operation complete and retain only the latest source version.
 - A scheduled recovery worker starts scanning after a one-second initial delay and then every five seconds. It retries the Availability PUT if the durable phase is still `AVAILABILITY_PENDING`; otherwise it retries only publication. An input replay or a newer version also tries to finish the pending operation first.
-- Exhausted `429`/`503` attempts and transport failures remain eligible for scheduled recovery. Other downstream HTTP errors are recorded as `AVAILABILITY_FAILED` or `PUBLICATION_FAILED` and are not polled automatically; an input replay retries them after the underlying issue is corrected. A newer version tries to resolve the earlier operation first so it cannot silently overtake it.
+- Exhausted `429`/`503` attempts and transport failures during Availability PUT or output publication remain eligible for scheduled recovery. Other HTTP errors from those two side-effect calls are recorded as `AVAILABILITY_FAILED` or `PUBLICATION_FAILED` and are not polled automatically; an input replay retries them after the underlying issue is corrected. A newer version tries to resolve the earlier operation first so it cannot silently overtake it. A Product Context `404` is handled before an outbox operation is created and is returned as `422`.
 - A crash after remote PUT success but before saving `PUBLICATION_PENDING` can cause the same PUT to be sent again. This relies on the API's PUT operation being idempotent for the same stock key and source version. A crash after event acceptance but before marking completion can cause a repeat publish with the same event ID; downstream consumers must deduplicate by that ID.
 - The H2 file is durable across local process restarts but supports only one local application instance in this setup. A production multi-instance service should use a shared database, transactionally update state/outbox records, coordinate stock-key processing, and publish through an outbox relay.
 
@@ -103,3 +103,29 @@ Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/__admin/mappings/$(
 ```
 
 Within the configured poll interval, the recovery worker should publish the saved event without repeating the availability PUT. The automated store and service tests cover persistence across store recreation and recovery without an incoming replay. These unauthenticated admin calls are local-test-only; keep WireMock bound to localhost.
+
+## Alternatives considered
+
+| Concern | Chosen for this exercise | Alternative considered | Why the alternative was not selected here |
+|---|---|---|---|
+| Reuse between event and bulk paths | One shared processing service, with the bulk path supplying a snapshot-backed context resolver. | Separate event and CSV implementations. | Separate flows can drift on version checks, eligibility, recovery, and output behavior. |
+| Product Context matching | One snapshot per valid country and a sparse hash index of requested keys. | One GET per row, nested scan of the snapshot for every row, or indexing every snapshot object. | Per-row HTTP multiplies latency; nested scans are quadratic in the two collection sizes; a full index retains contexts the job never uses. |
+| Stock-key locking | 64 striped locks in one process, plus persisted source-version state. | A lock object per key or database/distributed lock. | A per-key lock map needs lifecycle management; a distributed lock is unnecessary for the single-instance local exercise. Striped locks can serialize unrelated keys and do not coordinate multiple app instances. |
+| Partial downstream success | Persist a local outbox state before the PUT and persist a publication-pending phase after the PUT. | Call PUT and publish sequentially without durable state, or assume a transaction spanning both HTTP services. | Without durable phase state a crash can lose publication; an atomic transaction cannot span these independent HTTP systems. |
+| Retry policy | Retry only 429/503 up to three immediate attempts, honor `Retry-After`, then leave transient work recoverable. | Retry every error, retry indefinitely in the request thread, or fail all transient errors immediately. | Permanent errors should not be amplified; unlimited retries can tie up workers; immediate failure gives no short recovery opportunity. |
+| Bulk admission | Two workers, two queued jobs, 10 MB upload cap. | Unbounded worker/queue capacity. | Unbounded admission could consume memory and overwhelm the mocks or real dependencies. A durable queue is a better production scale-out option but adds infrastructure. |
+| Import job status | In-memory status, retaining the latest 20 jobs. | Persist job and row status in the H2/shared database. | In-memory state keeps the take-home implementation focused; it is not restart-safe or suitable for horizontally scaled job polling. |
+| Local database | File-backed H2 for a single local instance. | PostgreSQL or another managed/shared database. | H2 avoids a separate local dependency. Production needs shared transactional state, backup/retention, and cross-instance coordination. |
+| Event backbone | Recommend Kafka for production; use the provided HTTP sink locally. | RabbitMQ or a real broker in the local setup. | Kafka's retained log and independent consumer groups suit replay and downstream fan-out. RabbitMQ is a strong queue/routing choice but less suited to replaying a historical inventory log. No broker installation is required for this exercise. |
+
+## Prioritized future improvements
+
+These are production extensions, not omissions from the local exercise's stated deliverables:
+
+1. **Make state and job progress multi-instance safe.** Move H2 stock/outbox state and import job/results to a shared database. Use database transactions and optimistic or row-level locking for the stock key; use a transactional outbox relay. Persist enough job state to resume or report interrupted imports after restart.
+2. **Control downstream pressure across every ingress path.** Add separate bounded concurrency permits and token-bucket rate limits for Product Context, Availability, and event publishing. Apply admission control to individual events as well as imports; make overload visible through `429`/`503` and a retryable response.
+3. **Harden retry behavior under correlated failures.** Add randomized jitter, retry budgets, circuit breakers, per-dependency timeouts, and metrics for attempts, delay, final result, and pending age. Keep `Retry-After` support and avoid retrying permanent validation or missing-context errors.
+4. **Scale large imports without retaining full files in memory.** Stream or chunk parsing, stage the source file safely, and enqueue row batches into durable work storage. Preserve per-stock-key ordering while allowing bounded concurrency across independent keys.
+5. **Connect a production event broker.** Implement a publisher/consumer adapter around the shared business service and an outbox relay. For Kafka, partition by `(sellerId, productId, sizeId, countryCode)`; commit input offsets only after durable state is saved; deduplicate output by stable event ID. Re-evaluate the partition strategy against observed key distribution and hot-key risk.
+6. **Improve operational readiness.** Add structured correlation IDs, distributed traces, health/readiness checks for dependencies, business and saturation metrics, alerting, authentication/authorization, audit retention, and secret/configuration management. Keep mock admin endpoints local-only.
+7. **Expand resilience validation.** Add integration tests for process restarts at each outbox phase, uncertain remote acknowledgments, multiple countries with partial snapshot failure, and concurrency under a controlled dependency. Add load tests only when realistic target capacity is specified; the exercise itself defines no machine-specific timing threshold.
