@@ -7,7 +7,7 @@ This repository contains the assignment PDF, local mock dependencies, and a Java
 | [Assignment PDF](Take-Home%20Exercise_%20Size-Level%20Availability%20Processor.pdf) | Open in a PDF reader or browser to read the assignment, ownership diagram, contracts, business rules, and deliverables. |
 | [Run-Instructions](Run-Instructions.md) | Java 21 prerequisites and how to start the service locally. |
 | [TODO](TODO.md) | Ordered implementation record; points 1-7 are complete. |
-| [Implementation Decisions](DECISIONS.md) | Behavior choices, retry/versioning rules, and current limitations. |
+| [Implementation Decisions](DECISIONS.md) | Behavior choices, retry/versioning rules, the Kafka recommendation and RabbitMQ comparison, and current limitations. |
 | [Architecture and requirement coverage](ARCHITECTURE.md) | Requirement traceability, feature diagrams, use cases, tests, alternatives, and production improvements. |
 | This README | How to start the mocks, send a sample event to your service, and inspect its calls. |
 

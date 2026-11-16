@@ -71,7 +71,7 @@ The diagram shows logical responsibilities, not a requirement to deploy separate
 | Partial downstream success | Durable phase state lets recovery resume an availability write or publication without losing the saved output event. | `JdbcStockVersionStoreTest`, `AvailabilityProcessingServiceTest`, [DECISIONS](DECISIONS.md) |
 | Bursts and large imports | CSV work is bounded to two workers and two queued jobs; rows within a job are sequential; uploads are limited to 10 MB. | `AvailabilityImportExecutorConfiguration`, `application.properties` |
 | Supplied deterministic scale fixture | The repository includes a 10,000-row CSV and 50,000-entry PT snapshot. The README and [DECISIONS](DECISIONS.md) explain matching complexity without a machine-specific timing target. | `wiremock/__files/bulk-stock.csv`, `wiremock/__files/product-contexts-PT.json` |
-| Production broker choice | Kafka is recommended and compared with RabbitMQ; no broker is required for local execution. | [DECISIONS](DECISIONS.md) |
+| Production broker choice | Kafka is recommended for the inventory event backbone, compared in depth with RabbitMQ, and kept separate from local WireMock execution. | [DECISIONS](DECISIONS.md) |
 | Focused tests and operational instructions | Tests cover core flow, ordering, persistence, concurrency, retries, bulk validation, partial row outcomes, and controller contracts. Local commands and mock reset instructions are documented. | `src/test/java/`, [README](README.md), [Run-Instructions](Run-Instructions.md) |
 
 ## 4. Single-event feature
@@ -337,6 +337,25 @@ The deterministic Product Context/Availability fault inputs are listed in the [R
 | Job status | In-memory latest-20 registry for the exercise. | Persisted jobs/results survive restart and scale horizontally, but require a schema, retention policy, and transactional job updates. |
 | Local persistence | File-backed H2 for one local instance. | PostgreSQL or another shared database is appropriate for a production multi-instance service. |
 | Broker | Kafka is the recommended production backbone for replay and independent consumer groups. | RabbitMQ is strong for queue/routing workflows but less natural for replaying a retained inventory event log. Neither runs locally in this solution. |
+
+### Recommended Kafka integration (production only)
+
+```mermaid
+flowchart LR
+    CSV["CSV import job"] --> Stage["Validated and correlated row records"]
+    Event["Real event producer"] --> Input["Kafka inventory input topic"]
+    Stage --> Input
+    Input --> Group["Consumer group; sequential per partition"]
+    Group --> Shared["Shared inventory processing"]
+    Shared <--> DB[("Shared DB: inbox, versions, outbox")]
+    Shared --> Gateway["Availability API"]
+    DB --> Relay["Outbox relay"]
+    Relay --> Output["Kafka SizeAvailabilityUpdated topic"]
+    Output --> ConsumerA["Independent consumer group A"]
+    Output --> ConsumerB["Independent consumer group B"]
+```
+
+In this proposed production topology, CSV rows and real inbound events converge on the same input topic and processing rules. The record key is the full stock key, so independent partitions can progress concurrently while one key remains ordered. The database inbox/outbox bridges Kafka and the external HTTP gateway; output events are published from the outbox to a separate topic. Kafka is not part of the current application runtime. The adapter, partition strategy, offset/commit policy, and operational responsibilities are detailed in [DECISIONS](DECISIONS.md#production-broker-choice).
 
 The fuller retry, recovery, broker, and complexity rationale is in [DECISIONS](DECISIONS.md). Future production work is prioritized there.
 
